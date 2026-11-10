@@ -62,12 +62,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: start postgres, migrate and serve (no sync: no downloads in CI)
+      - name: "start postgres, migrate and serve (no sync: no downloads in CI)"
         working-directory: deploy/compose
         run: |
           ./make-secrets.sh > /dev/null
           docker compose up -d --build postgres migrate serve
-          for i in $(seq 1 60); do curl -fs localhost:8080/livez && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -fs localhost:8080/livez && break; sleep 2; done
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/livez)" = 200
           # no data yet: not ready, and the API refuses without a key
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/readyz)" = 503
