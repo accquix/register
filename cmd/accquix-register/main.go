@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,8 +19,12 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/accquix/register/internal/config"
 	"github.com/accquix/register/internal/migrate"
+	"github.com/accquix/register/internal/sources/rpo"
+	"github.com/accquix/register/internal/syncer"
 )
 
 // version is set at build time with -ldflags "-X main.version=…".
@@ -30,7 +35,7 @@ const usage = `usage: accquix-register <mode> [args]
 modes:
   migrate [up|down-to N|status]   apply or inspect the embedded schema migrations (default: up)
   serve                           read-only HTTP API (not implemented yet)
-  sync [--source NAME]            download and merge the sources (not implemented yet)
+  sync [--source rpo] [--unblock] download and merge the sources (one pass; rpo only so far)
   openapi                         print the OpenAPI 3.1 document (not implemented yet)
   version                         print the version
 
@@ -71,7 +76,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env confi
 	switch mode {
 	case "migrate":
 		err = runMigrate(ctx, cfg, rest, stdout, log)
-	case "serve", "sync", "openapi":
+	case "sync":
+		err = runSync(ctx, cfg, rest, log)
+	case "serve", "openapi":
 		err = fmt.Errorf("mode %q is not implemented yet", mode)
 	default:
 		err = fmt.Errorf("%w: unknown mode %q", errUsage, mode)
@@ -135,4 +142,48 @@ func runMigrate(ctx context.Context, cfg config.Config, args []string, stdout io
 	default:
 		return fmt.Errorf("%w: unknown migrate command %q", errUsage, sub)
 	}
+}
+
+func runSync(ctx context.Context, cfg config.Config, args []string, log *slog.Logger) error {
+	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	source := fs.String("source", "rpo", "source to sync: rpo")
+	unblock := fs.Bool("unblock", false, "restore the state before a validation block, then stop")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("%w: %w", errUsage, err)
+	}
+	if *source != "rpo" {
+		return fmt.Errorf("%w: unknown or not yet implemented source %q", errUsage, *source)
+	}
+	if cfg.SyncDatabaseURL == "" {
+		return errors.New("REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required")
+	}
+	conn, err := pgx.Connect(ctx, cfg.SyncDatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	if *unblock {
+		if err := syncer.Unblock(ctx, conn, *source); err != nil {
+			return err
+		}
+		log.Info("unblocked", "source", *source)
+		return nil
+	}
+	s := syncer.NewRPO(conn, syncer.RPOConfig{
+		Bucket:           rpo.NewBucket(cfg.RPOBucketURL),
+		WorkDir:          cfg.WorkDir,
+		Concurrency:      cfg.DownloadConcurrency,
+		PartRecords:      cfg.RPOPartRecords,
+		DailyMaxRecords:  cfg.RPODailyMaxRecords,
+		SnapshotMinRatio: cfg.RPOSnapshotMinRatio,
+		AbsenceMaxRatio:  cfg.AbsenceMaxRatio,
+		Log:              log,
+	})
+	err = s.Run(ctx)
+	if errors.Is(err, syncer.ErrLocked) {
+		log.Info("another sync is running; nothing to do")
+		return nil
+	}
+	return err
 }

@@ -50,7 +50,7 @@ func testDatabase(t *testing.T) string {
 
 var expectedTables = []string{
 	"rpo_record", "fs_tax_subject", "fs_vat_payer", "fs_list_entry", "rpo_record_stage", "fs_stage",
-	"search_name", "search_token", "search_word", "sync_source", "sync_unit", "sync_run", "rpo_snapshot_seen",
+	"search_name", "search_token", "search_word", "sync_source", "sync_unit", "sync_run", "rpo_snapshot_seen", "rpo_seen",
 }
 
 func tableCount(t *testing.T, dsn string) int {

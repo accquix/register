@@ -76,3 +76,30 @@ func TestLoadBadLevel(t *testing.T) {
 		t.Fatal("want an error for an unknown level")
 	}
 }
+
+func TestLoadSyncDefaultsAndOverrides(t *testing.T) {
+	c, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SyncDatabaseURL != "postgres://a" || c.DownloadConcurrency != 6 || c.RPOPartRecords != 100_000 ||
+		c.RPODailyMaxRecords != 20_000 || c.RPOSnapshotMinRatio != 0.98 || c.AbsenceMaxRatio != 0.005 || c.RPOBucketURL == "" {
+		t.Fatalf("unexpected sync defaults: %+v", c)
+	}
+	c, err = Load(env(map[string]string{"REGISTER_SYNC_DATABASE_URL": "postgres://direct", "REGISTER_DOWNLOAD_CONCURRENCY": "2",
+		"REGISTER_ABSENCE_MAX_RATIO": "0.01"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SyncDatabaseURL != "postgres://direct" || c.DownloadConcurrency != 2 || c.AbsenceMaxRatio != 0.01 {
+		t.Fatalf("overrides not applied: %+v", c)
+	}
+}
+
+func TestLoadRejectsBadNumbers(t *testing.T) {
+	for k, v := range map[string]string{"REGISTER_DOWNLOAD_CONCURRENCY": "0", "REGISTER_RPO_PART_RECORDS": "x", "REGISTER_ABSENCE_MAX_RATIO": "2"} {
+		if _, err := Load(env(map[string]string{k: v}, nil)); err == nil {
+			t.Errorf("%s=%s accepted", k, v)
+		}
+	}
+}

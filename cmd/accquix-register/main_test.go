@@ -24,6 +24,8 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{"help"}, 0, "modes:"},
 		{[]string{"nope"}, 2, "unknown mode"},
 		{[]string{"serve"}, 1, "not implemented"},
+		{[]string{"sync"}, 1, "REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required"},
+		{[]string{"sync", "--source", "fs"}, 2, "not yet implemented source"},
 		{[]string{"migrate"}, 1, "REGISTER_MIGRATE_DATABASE_URL or REGISTER_DATABASE_URL is required"},
 	}
 	for _, c := range cases {

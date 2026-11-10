@@ -167,6 +167,7 @@ CREATE TABLE sync_source (
     base_snapshot   date,
     applied_through date,
     published_as_of date,
+    previous_state  text,                                       -- restored by an operator unblock
     cursor          jsonb       NOT NULL DEFAULT '{}'::jsonb,
     diagnostic      text,
     updated_at      timestamptz NOT NULL DEFAULT now()
@@ -195,15 +196,23 @@ CREATE TABLE sync_run (
     error       text
 );
 
-CREATE TABLE rpo_snapshot_seen (
+CREATE TABLE rpo_snapshot_seen (                               -- snapshots fully applied
     snapshot_date   date        PRIMARY KEY,
     parts           integer     NOT NULL,
+    records         bigint      NOT NULL,                       -- the next snapshot must keep >= 98 %
     manifest_sha256 text        NOT NULL,
-    first_seen_at   timestamptz NOT NULL DEFAULT now()
+    applied_at      timestamptz NOT NULL DEFAULT now()
+);
+
+-- Ids seen in the snapshot being reconciled. Logged on purpose: a reconcile resumes after a crash
+-- and the absence marking at its end needs every part's ids.
+CREATE TABLE rpo_seen (
+    id bigint PRIMARY KEY
 );
 
 -- +goose Down
 
+DROP TABLE rpo_seen;
 DROP TABLE rpo_snapshot_seen;
 DROP TABLE sync_run;
 DROP TABLE sync_unit;

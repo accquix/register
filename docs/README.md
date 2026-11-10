@@ -3,6 +3,7 @@
 | Document | What it holds |
 | --- | --- |
 | [decisions.md](decisions.md) | The maintainers' decisions (binding) |
+| [configuration.md](configuration.md) | Commands and environment variables implemented so far |
 | [architecture.md](architecture.md) | v1 design: data model, API, sync pipeline, personal data, deployment |
 | [sources.md](sources.md) | Sources, URLs, licences, file layouts, quirks, measured volumes |
 | [open-questions.md](open-questions.md) | What is still open |

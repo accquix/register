@@ -14,12 +14,20 @@ linters:
         - fmt.Fprintln
         - fmt.Fprintf
         - fmt.Fprint
+        # Closing read-only resources (files read, HTTP bodies, connections at exit).
+        - (*os.File).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*github.com/jackc/pgx/v5.Conn).Close
         - (*database/sql.DB).Close
         - (github.com/jackc/pgx/v5.Tx).Rollback
   exclusions:
     rules:
       # Test cleanups and best-effort closes may ignore errors.
       - path: _test\.go
+        linters: [errcheck]
+      # Test helpers (fake bucket, file writer) write to in-memory buffers and test servers.
+      - path: internal/testkit/
         linters: [errcheck]
 
 formatters:
