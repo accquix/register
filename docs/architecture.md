@@ -22,7 +22,6 @@ internal/config/             env + _FILE secrets
 internal/normalize/          name_core, legal-form suffixes, addresses, PSČ, identifier classification (pure)
 internal/sources/{rpo,fs}/   fetch (parallel parts, Range resume, ETag, retry) + stream-parse into typed rows; no DB
 internal/ingest/             staging COPY, validation, hash merge, absence marking, subject and search refresh, checkpoints
-internal/scheduler/          gocron + PostgreSQL advisory lock
 internal/lookup/             subject assembly, sections, freshness and certainty rules
 internal/search/             default (adaptive), fuzzy (word dictionary), ranking, limits
 internal/api/                Huma handlers, auth, rate limits, RFC 9457 problems
@@ -31,7 +30,7 @@ db/migrations/*.sql          goose, embedded
 db/queries/*.sql             sqlc input
 api/openapi.yaml             committed; CI fails on drift
 testdata/{rpo,fs}/           SYNTHETIC fixtures only
-deploy/compose/              postgres:18 → migrate → serve + sync
+deploy/compose/              postgres:18 → migrate → serve + sync --every 1h
 ```
 
 ## Data model
@@ -43,7 +42,7 @@ subject/search layer that `sync` maintains in the same unit transaction.
 
 | Table | Key | Content |
 | --- | --- | --- |
-| `rpo_record` | RPO `id` | `ico` (valid 8 digits, else null; **not unique**), `kind` (legal_person, sole_trader, public_body, other), `name`, `name_core`, `legal_suffix`, legal form code and text, `established_on`, `terminated_on`, address parts (street, building number, normalised PSČ, municipality, country), the current `registration` (register, office, number, valid from), `search_suppressed` |
+| `rpo_record` | RPO `id` | `ico` (valid 8 digits, else null; **not unique**), `kind` (legal_person, sole_trader, public_body, other), `name`, `name_core`, `legal_suffix`, legal form code and text, `established_on`, `terminated_on`, address parts (street, building number, normalised PSČ, municipality, country), the current `registration` (register, office, number, valid from) |
 | `fs_tax_subject` | DIČ | `ds_dsrdp`: IČO optional, name, municipality, address |
 | `fs_vat_payer` | `IC_DPH` plus IČO or normalised name (VAT groups share an IČ DPH) | `ds_dphs`: paragraph, `registered_on`, `type_changed_on`, `payer_from` (empty for §7/§7a), name, city |
 | `fs_list_entry` | (dataset, subject_key) | `ds_dphz`, `ds_dphv`, `ds_dpho`, `ds_iz_ran`; `attrs` typed per dataset in Go; per-list dedup rule |
@@ -68,7 +67,8 @@ subject/search layer that `sync` maintains in the same unit transaction.
   the adaptive word step and the fuzzy correction.
 - After each unit, `sync` recomputes these rows for the subjects the unit touched.
 - Only active subjects are in the search layer; terminated subjects are reachable by exact lookup.
-  `search_suppressed` (objection) removes a subject from the search layer only.
+  A subject listed in `search_suppression` (an objection, keyed by subject key) is left out of the
+  search layer only.
 
 ### Normalisation rules (pure Go, shared by ingest and search)
 
@@ -230,7 +230,8 @@ temporary file first, because a ZIP's index is at the end. Set `GOMEMLIMIT`.
 - **Terminated subjects:** available by exact lookup, left out of the default search.
 - **Natural persons without an IČO:** never in name search; exact DIČ only, minimal fields,
   authenticated keys only (D26).
-- **Objections:** an operator command sets `search_suppressed`. The person stays reachable by exact
+- **Objections:** `accquix-register suppress --subject <IČO>` adds the subject to `search_suppression`
+  (and `--undo` removes it). The person stays reachable by exact
   identifier and disappears from name search.
 - **The deployer is the controller.** `docs/self-hosting.md` will say so (to write).
 

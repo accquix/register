@@ -27,7 +27,9 @@ import (
 
 	"github.com/accquix/register/internal/api"
 	"github.com/accquix/register/internal/config"
+	"github.com/accquix/register/internal/ingest"
 	"github.com/accquix/register/internal/migrate"
+	"github.com/accquix/register/internal/normalize"
 	"github.com/accquix/register/internal/search"
 	"github.com/accquix/register/internal/sources/fs"
 	"github.com/accquix/register/internal/sources/rpo"
@@ -42,7 +44,10 @@ const usage = `usage: accquix-register <mode> [args]
 modes:
   migrate [up|down-to N|status]   apply or inspect the embedded schema migrations (default: up)
   serve                           read-only HTTP API
-  sync [--source rpo|fs|all]      one pass over the sources (default: all)
+  sync [--source rpo|fs|all] [--every D]  one pass over the sources (default: all); with
+                                  --every (e.g. 1h) it repeats until stopped
+  suppress --subject ICO [--undo] [--reason TEXT]
+                                  keep a subject out of name search (GDPR objection)
   sync --unblock --source S       after a validation block (S: rpo or fs:<list>)
   openapi                         print the OpenAPI 3.1 document (YAML)
   version                         print the version
@@ -88,6 +93,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env confi
 		err = runSync(ctx, cfg, rest, log)
 	case "serve":
 		err = runServe(ctx, cfg, log)
+	case "suppress":
+		err = runSuppress(ctx, cfg, rest, stdout)
 	case "openapi":
 		err = runOpenAPI(stdout)
 	default:
@@ -159,6 +166,7 @@ func runSync(ctx context.Context, cfg config.Config, args []string, log *slog.Lo
 	fset.SetOutput(io.Discard)
 	source := fset.String("source", "all", "rpo, fs or all; with --unblock: rpo or fs:<list>")
 	unblock := fset.Bool("unblock", false, "restore the state before a validation block, then stop")
+	every := fset.Duration("every", 0, "repeat the pass at this interval until stopped (e.g. 1h)")
 	if err := fset.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
@@ -186,6 +194,26 @@ func runSync(ctx context.Context, cfg config.Config, args []string, log *slog.Lo
 		log.Info("unblocked", "source", src)
 		return nil
 	}
+	if *every > 0 {
+		if *every < time.Minute {
+			return fmt.Errorf("%w: --every must be at least 1m", errUsage)
+		}
+		for {
+			if err := syncPass(ctx, conn, cfg, src, log); err != nil {
+				// keep going: a blocked source or a network error must not stop the schedule
+				log.Error("sync pass failed", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(*every):
+			}
+		}
+	}
+	return syncPass(ctx, conn, cfg, src, log)
+}
+
+func syncPass(ctx context.Context, conn *pgx.Conn, cfg config.Config, src string, log *slog.Logger) error {
 	var errs []error
 	if src == "rpo" || src == "all" {
 		errs = append(errs, syncer.NewRPO(conn, syncer.RPOConfig{
@@ -262,4 +290,38 @@ func runOpenAPI(stdout io.Writer) error {
 	}
 	_, err = stdout.Write(b)
 	return err
+}
+
+func runSuppress(ctx context.Context, cfg config.Config, args []string, stdout io.Writer) error {
+	fset := flag.NewFlagSet("suppress", flag.ContinueOnError)
+	fset.SetOutput(io.Discard)
+	subject := fset.String("subject", "", "the subject's IČO (or r<RPO id> for a record without one)")
+	undo := fset.Bool("undo", false, "put the subject back into name search")
+	reason := fset.String("reason", "", "operator note, e.g. a ticket number; never personal data")
+	if err := fset.Parse(args); err != nil {
+		return fmt.Errorf("%w: %w", errUsage, err)
+	}
+	key := strings.TrimSpace(*subject)
+	if ico, ok := normalize.ICO(key); ok {
+		key = ico
+	} else if _, err := strconv.ParseUint(strings.TrimPrefix(key, "r"), 10, 64); err != nil || !strings.HasPrefix(key, "r") {
+		return fmt.Errorf("%w: --subject needs an IČO (8 digits) or r<RPO id>", errUsage)
+	}
+	if cfg.SyncDatabaseURL == "" {
+		return errors.New("REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required")
+	}
+	conn, err := pgx.Connect(ctx, cfg.SyncDatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	if err := ingest.Suppress(ctx, conn, key, *reason, !*undo); err != nil {
+		return err
+	}
+	if *undo {
+		fmt.Fprintln(stdout, "back in name search")
+	} else {
+		fmt.Fprintln(stdout, "kept out of name search; exact lookup is unaffected")
+	}
+	return nil
 }

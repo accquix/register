@@ -28,6 +28,8 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{"openapi"}, 0, "openapi: 3.1"},
 		{[]string{"sync"}, 1, "REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required"},
 		{[]string{"sync", "--source", "nope"}, 2, "unknown source"},
+		{[]string{"suppress"}, 2, "--subject needs"},
+		{[]string{"suppress", "--subject", "rx"}, 2, "--subject needs"},
 		{[]string{"sync", "--unblock", "--source", "fs"}, 2, "--unblock needs"},
 		{[]string{"sync", "--unblock", "--source", "fs:ds_iban"}, 2, "--unblock needs"},
 		{[]string{"migrate"}, 1, "REGISTER_MIGRATE_DATABASE_URL or REGISTER_DATABASE_URL is required"},

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/accquix/register/internal/api"
+	"github.com/accquix/register/internal/ingest"
 	"github.com/accquix/register/internal/sources/fs"
 	"github.com/accquix/register/internal/sources/rpo"
 	"github.com/accquix/register/internal/syncer"
@@ -328,6 +329,27 @@ func TestAPI(t *testing.T) {
 		_, _, m := e.get(t, "/v1/lookup/99900001", true)
 		if path(m["subjects"].([]any)[0], "identity", "source", "stale") != true {
 			t.Fatal("a stale section must be flagged")
+		}
+	})
+
+	t.Run("objection keeps a subject out of name search only", func(t *testing.T) {
+		conn := testkit.Conn(t, dsn)
+		if err := ingest.Suppress(context.Background(), conn, "99900002", "ticket-1", true); err != nil {
+			t.Fatal(err)
+		}
+		_, _, m := e.get(t, "/v1/search?q=rybka", true)
+		if strings.Contains(strings.Join(names(m), "|"), "Strieborná") {
+			t.Fatal("a suppressed subject is still in name search")
+		}
+		if code, _, _ := e.get(t, "/v1/lookup/99900002", true); code != 200 {
+			t.Fatalf("exact lookup of a suppressed subject: %d", code)
+		}
+		if err := ingest.Suppress(context.Background(), conn, "99900002", "", false); err != nil {
+			t.Fatal(err)
+		}
+		_, _, m = e.get(t, "/v1/search?q=rybka", true)
+		if !strings.Contains(strings.Join(names(m), "|"), "Strieborná") {
+			t.Fatal("an unsuppressed subject did not come back")
 		}
 	})
 

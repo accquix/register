@@ -1,0 +1,81 @@
+# Accquix Register, reference self-hosted deployment.
+# See docs/self-hosting.md. Create the three secret files first (no default credentials):
+#   deploy/compose/secrets/postgres_password   the database password
+#   deploy/compose/secrets/database_url        postgres://register:<password>@postgres:5432/register?sslmode=disable
+#   deploy/compose/secrets/api_keys            name:sha256hex[,name2:sha256hex]
+name: accquix-register
+
+x-register: &register
+  image: ${REGISTER_IMAGE:-accquix-register:local}
+  build:
+    context: ../..
+    args:
+      VERSION: ${REGISTER_VERSION:-dev}
+  environment:
+    REGISTER_DATABASE_URL_FILE: /run/secrets/database_url
+    REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+  secrets: [database_url]
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: register
+      POSTGRES_USER: register
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U register -d register"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *register
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  sync:
+    <<: *register
+    # one pass every hour; a pass with nothing new costs a few requests
+    command: ["sync", "--every", "${REGISTER_SYNC_EVERY:-1h}"]
+    volumes:
+      - work:/var/lib/accquix-register
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  serve:
+    <<: *register
+    command: ["serve"]
+    environment:
+      REGISTER_DATABASE_URL_FILE: /run/secrets/database_url
+      REGISTER_API_KEYS_FILE: /run/secrets/api_keys
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+      REGISTER_SEARCH_FUZZY: ${REGISTER_SEARCH_FUZZY:-true}
+    secrets: [database_url, api_keys]
+    ports:
+      - "${REGISTER_PUBLISH:-127.0.0.1:8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  database_url:
+    file: ./secrets/database_url
+  api_keys:
+    file: ./secrets/api_keys
+
+volumes:
+  pgdata:
+  work:

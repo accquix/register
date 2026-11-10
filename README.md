@@ -6,7 +6,8 @@ Accquix Register is a free, open-source service that builds and maintains your o
 database of Slovak companies and sole traders from the official public registers, with no
 commercial API subscription and no vendor lock-in.
 
-> **Status: in development.** No release yet. The design is in [docs/](docs/).
+> **Status: in development.** No release yet. It already syncs the real sources and serves the
+> API; see [docs/self-hosting.md](docs/self-hosting.md) to try it.
 
 ## What it does
 
@@ -22,6 +23,23 @@ commercial API subscription and no vendor lock-in.
     lists, each with its source and as-of date.
 - **Runs anywhere:** one Go binary and plain PostgreSQL (16–18, Neon, PlanetScale, Supabase, RDS…).
   `docker compose up` brings up everything.
+
+## Quick start
+
+```sh
+git clone https://github.com/accquix/register && cd register/deploy/compose
+./make-secrets.sh && docker compose up -d
+```
+
+The first sync downloads about 1 GB and takes 10–20 minutes. Then:
+
+```sh
+curl -s -H "Authorization: Bearer <key>" "localhost:8080/v1/search?q=tatra%20banka"
+curl -s -H "Authorization: Bearer <key>" "localhost:8080/v1/lookup/<IČO>"
+```
+
+Requirements, database roles, monitoring and GDPR duties: [docs/self-hosting.md](docs/self-hosting.md).
+API contract: [api/openapi.yaml](api/openapi.yaml).
 
 ## What it is not
 

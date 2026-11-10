@@ -25,8 +25,9 @@ func searchNameSelect(recordFilter, keyFilter string) string {
          row_number() OVER (PARTITION BY ` + skeyExpr + `
            ORDER BY (coalesce(r.register_code, '') IN ('1', '2')) DESC, r.src_date DESC, r.changed_at DESC, r.id DESC) AS rn
   FROM rpo_record r
-  WHERE r.terminated_on IS NULL AND r.removed_at IS NULL AND NOT r.search_suppressed
+  WHERE r.terminated_on IS NULL AND r.removed_at IS NULL
     AND r.name_core <> '' AND r.name IS NOT NULL ` + recordFilter + `
+    AND NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = ` + skeyExpr + `)
 )
 SELECT DISTINCT ON (skey, name_core) skey, name_core, name, ico, municipality, kind, rn = 1
 FROM recs WHERE true ` + keyFilter + `
@@ -126,4 +127,39 @@ func MarkAbsent(ctx context.Context, tx pgx.Tx, snapshot time.Time, maxRatio flo
 	}
 	r.Marked = true
 	return r, nil
+}
+
+// RefreshSubjects rebuilds the search rows of the given subject keys (used after an operator
+// change such as a suppression).
+func RefreshSubjects(ctx context.Context, tx pgx.Tx, skeys []string) error {
+	if err := createTouched(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO touched (skey) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING`, skeys); err != nil {
+		return err
+	}
+	return refreshTouched(ctx, tx)
+}
+
+// Suppress keeps a subject (IČO, or "r<RPO id>") out of name search, or puts it back (D26 and
+// architecture "Objections"). Exact lookup by identifier is unaffected.
+func Suppress(ctx context.Context, conn *pgx.Conn, skey, reason string, on bool) error {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if on {
+		_, err = tx.Exec(ctx, `INSERT INTO search_suppression (skey, reason) VALUES ($1, nullif($2, ''))
+ON CONFLICT (skey) DO UPDATE SET reason = EXCLUDED.reason`, skey, reason)
+	} else {
+		_, err = tx.Exec(ctx, `DELETE FROM search_suppression WHERE skey = $1`, skey)
+	}
+	if err != nil {
+		return err
+	}
+	if err := RefreshSubjects(ctx, tx, []string{skey}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

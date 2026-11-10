@@ -33,7 +33,6 @@ CREATE TABLE rpo_record (
     registration_office     text,
     registration_number     text,
     registration_valid_from date,
-    search_suppressed       boolean     NOT NULL DEFAULT false, -- objection: out of name search only
     source_as_of            date        NOT NULL,
     src_date                date        NOT NULL,               -- order guard: (src_date, src_rank)
     src_rank                smallint    NOT NULL,               -- 0 daily file, 1 snapshot
@@ -130,6 +129,14 @@ CREATE UNLOGGED TABLE fs_stage (
 -- skey: the valid IČO, else 'r' || RPO id. Only active, non-suppressed subjects are here.
 -- ---------------------------------------------------------------------------------------------
 
+-- Objections (GDPR): subjects kept out of name search. Keyed by subject key, so a new RPO record of
+-- the same IČO stays suppressed. Exact identifier lookup is not affected.
+CREATE TABLE search_suppression (
+    skey       text        PRIMARY KEY,
+    reason     text,                                            -- operator note, never personal data
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE search_name (                                      -- one row per distinct official name
     skey         text    NOT NULL,
     name_core    text    NOT NULL,
@@ -218,6 +225,7 @@ DROP TABLE sync_run;
 DROP TABLE sync_unit;
 DROP TABLE sync_source;
 DROP TABLE search_word;
+DROP TABLE search_suppression;
 DROP TABLE search_token;
 DROP TABLE search_name;
 DROP TABLE fs_stage;

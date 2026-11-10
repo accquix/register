@@ -182,7 +182,7 @@ ON CONFLICT (unit) DO UPDATE SET sha256 = EXCLUDED.sha256, status = 'rejected', 
 
 // The order guard: a row is replaced only by data of the same or a later (date, rank), and only
 // when its exposed content changed (or it had been marked absent). Operator flags such as
-// search_suppressed are never overwritten.
+// objections live in search_suppression, outside the merged rows.
 const changedPredicate = `(r.src_date, r.src_rank) <= (s.src_date, s.src_rank)
   AND (r.row_hash IS DISTINCT FROM s.row_hash OR r.removed_at IS NOT NULL)`
 
