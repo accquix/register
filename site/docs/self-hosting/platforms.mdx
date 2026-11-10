@@ -19,7 +19,8 @@ Only one sync runs at a time (a PostgreSQL advisory lock); an overlapping start 
     Run `migrate` as a `Job` or an init step of your release.
   </Tab>
   <Tab title="AWS ECS / Fargate">
-    A service for `serve` (0.25 vCPU / 0.5 GB is enough) and an EventBridge-scheduled task for `sync` (512 MB).
+    A service for `serve` (0.25 vCPU / 0.5 GB is enough) and an EventBridge-scheduled task for `sync`. See
+    [AWS](/self-hosting/aws) for the full layout and the pitfalls.
   </Tab>
   <Tab title="Google Cloud Run">
     A Cloud Run service for `serve` and a Cloud Run job for `sync`, triggered by Cloud Scheduler.
