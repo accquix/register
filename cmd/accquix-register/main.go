@@ -17,12 +17,14 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/accquix/register/internal/config"
 	"github.com/accquix/register/internal/migrate"
+	"github.com/accquix/register/internal/sources/fs"
 	"github.com/accquix/register/internal/sources/rpo"
 	"github.com/accquix/register/internal/syncer"
 )
@@ -35,7 +37,8 @@ const usage = `usage: accquix-register <mode> [args]
 modes:
   migrate [up|down-to N|status]   apply or inspect the embedded schema migrations (default: up)
   serve                           read-only HTTP API (not implemented yet)
-  sync [--source rpo] [--unblock] download and merge the sources (one pass; rpo only so far)
+  sync [--source rpo|fs|all]      one pass over the sources (default: all)
+  sync --unblock --source S       after a validation block (S: rpo or fs:<list>)
   openapi                         print the OpenAPI 3.1 document (not implemented yet)
   version                         print the version
 
@@ -145,15 +148,21 @@ func runMigrate(ctx context.Context, cfg config.Config, args []string, stdout io
 }
 
 func runSync(ctx context.Context, cfg config.Config, args []string, log *slog.Logger) error {
-	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	source := fs.String("source", "rpo", "source to sync: rpo")
-	unblock := fs.Bool("unblock", false, "restore the state before a validation block, then stop")
-	if err := fs.Parse(args); err != nil {
+	fset := flag.NewFlagSet("sync", flag.ContinueOnError)
+	fset.SetOutput(io.Discard)
+	source := fset.String("source", "all", "rpo, fs or all; with --unblock: rpo or fs:<list>")
+	unblock := fset.Bool("unblock", false, "restore the state before a validation block, then stop")
+	if err := fset.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
-	if *source != "rpo" {
-		return fmt.Errorf("%w: unknown or not yet implemented source %q", errUsage, *source)
+	src := *source
+	if *unblock {
+		_, isList := fs.ListBySlug(strings.TrimPrefix(src, "fs:"))
+		if src != "rpo" && (!strings.HasPrefix(src, "fs:") || !isList) {
+			return fmt.Errorf("%w: --unblock needs --source rpo or fs:<list> (lists: %s)", errUsage, strings.Join(fs.Slugs(), ", "))
+		}
+	} else if src != "rpo" && src != "fs" && src != "all" {
+		return fmt.Errorf("%w: unknown source %q (rpo, fs or all)", errUsage, src)
 	}
 	if cfg.SyncDatabaseURL == "" {
 		return errors.New("REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required")
@@ -164,26 +173,35 @@ func runSync(ctx context.Context, cfg config.Config, args []string, log *slog.Lo
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
 	if *unblock {
-		if err := syncer.Unblock(ctx, conn, *source); err != nil {
+		if err := syncer.Unblock(ctx, conn, src); err != nil {
 			return err
 		}
-		log.Info("unblocked", "source", *source)
+		log.Info("unblocked", "source", src)
 		return nil
 	}
-	s := syncer.NewRPO(conn, syncer.RPOConfig{
-		Bucket:           rpo.NewBucket(cfg.RPOBucketURL),
-		WorkDir:          cfg.WorkDir,
-		Concurrency:      cfg.DownloadConcurrency,
-		PartRecords:      cfg.RPOPartRecords,
-		DailyMaxRecords:  cfg.RPODailyMaxRecords,
-		SnapshotMinRatio: cfg.RPOSnapshotMinRatio,
-		AbsenceMaxRatio:  cfg.AbsenceMaxRatio,
-		Log:              log,
-	})
-	err = s.Run(ctx)
-	if errors.Is(err, syncer.ErrLocked) {
-		log.Info("another sync is running; nothing to do")
-		return nil
+	var errs []error
+	if src == "rpo" || src == "all" {
+		errs = append(errs, syncer.NewRPO(conn, syncer.RPOConfig{
+			Bucket:           rpo.NewBucket(cfg.RPOBucketURL),
+			WorkDir:          cfg.WorkDir,
+			Concurrency:      cfg.DownloadConcurrency,
+			PartRecords:      cfg.RPOPartRecords,
+			DailyMaxRecords:  cfg.RPODailyMaxRecords,
+			SnapshotMinRatio: cfg.RPOSnapshotMinRatio,
+			AbsenceMaxRatio:  cfg.AbsenceMaxRatio,
+			Log:              log,
+		}).Run(ctx))
 	}
-	return err
+	if src == "fs" || src == "all" {
+		errs = append(errs, syncer.NewFS(conn, syncer.FSConfig{
+			Client: fs.NewClient(cfg.FSBaseURL), WorkDir: cfg.WorkDir, MaxDrop: cfg.FSMaxDrop, Log: log,
+		}).Run(ctx))
+	}
+	for i, e := range errs {
+		if errors.Is(e, syncer.ErrLocked) {
+			log.Info("another sync is running; nothing to do")
+			errs[i] = nil
+		}
+	}
+	return errors.Join(errs...)
 }

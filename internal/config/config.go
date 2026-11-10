@@ -36,6 +36,11 @@ type Config struct {
 	RPODailyMaxRecords  int     // REGISTER_RPO_DAILY_MAX_RECORDS, 20000
 	RPOSnapshotMinRatio float64 // REGISTER_RPO_SNAPSHOT_MIN_RATIO, 0.98
 	AbsenceMaxRatio     float64 // REGISTER_ABSENCE_MAX_RATIO, 0.005
+	// FSBaseURL serves the Financial Administration list exports (REGISTER_FS_BASE_URL).
+	FSBaseURL string
+	// FSMaxDrop overrides every FS list's drop threshold when set (REGISTER_FS_MAX_DROP; default:
+	// 0.03 for ds_dsrdp, ds_dphs, ds_iz_ran and 0.20 for the small lists).
+	FSMaxDrop float64
 }
 
 // Env abstracts the process environment for tests.
@@ -120,6 +125,15 @@ func Load(e Env) (Config, error) {
 	for _, v := range floats {
 		if *v.dst, err = ratio(e.Getenv(v.name), v.def); err != nil {
 			return c, fmt.Errorf("%s: %w", v.name, err)
+		}
+	}
+	c.FSBaseURL = e.Getenv("REGISTER_FS_BASE_URL")
+	if c.FSBaseURL == "" {
+		c.FSBaseURL = "https://report.financnasprava.sk"
+	}
+	if v := e.Getenv("REGISTER_FS_MAX_DROP"); v != "" {
+		if c.FSMaxDrop, err = ratio(v, 0); err != nil {
+			return c, fmt.Errorf("REGISTER_FS_MAX_DROP: %w", err)
 		}
 	}
 	switch lvl := strings.ToLower(e.Getenv("REGISTER_LOG_LEVEL")); lvl {

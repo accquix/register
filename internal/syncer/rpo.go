@@ -86,7 +86,9 @@ type State struct {
 	PublishedAsOf  string
 	PreviousState  string
 	Cursor         struct {
-		Reconcile string `json:"reconcile,omitempty"`
+		Reconcile string `json:"reconcile,omitempty"` // RPO: snapshot being reconciled
+		ETag      string `json:"etag,omitempty"`      // FS: ETag of the applied version
+		SHA256    string `json:"sha256,omitempty"`    // FS: content hash of the applied version
 	}
 	Diagnostic string
 }
@@ -159,16 +161,32 @@ ON CONFLICT (source) DO UPDATE SET state = EXCLUDED.state, base_snapshot = EXCLU
 	return err
 }
 
-func (s *RPO) save(ctx context.Context, st State) error {
-	tx, err := s.conn.Begin(ctx)
+func (s *RPO) save(ctx context.Context, st State) error { return save(ctx, s.conn, "rpo", st) }
+
+func save(ctx context.Context, conn *pgx.Conn, source string, st State) error {
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := saveState(ctx, tx, "rpo", st); err != nil {
+	if err := saveState(ctx, tx, source, st); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// lock takes the sync advisory lock; the returned func releases it.
+func lock(ctx context.Context, conn *pgx.Conn) (func(), error) {
+	var ok bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, LockKey).Scan(&ok); err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrLocked
+	}
+	return func() {
+		conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, LockKey) //nolint:errcheck
+	}, nil
 }
 
 // Unblock restores the state that was active before the source was blocked.
@@ -186,14 +204,11 @@ func Unblock(ctx context.Context, conn *pgx.Conn, source string) error {
 
 // Run performs one sync pass: bootstrap, reconcile and daily files as far as the bucket allows.
 func (s *RPO) Run(ctx context.Context) error {
-	var locked bool
-	if err := s.conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, LockKey).Scan(&locked); err != nil {
+	unlock, err := lock(ctx, s.conn)
+	if err != nil {
 		return err
 	}
-	if !locked {
-		return ErrLocked
-	}
-	defer s.conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, LockKey) //nolint:errcheck
+	defer unlock()
 
 	st, err := LoadState(ctx, s.conn, "rpo")
 	if err != nil {

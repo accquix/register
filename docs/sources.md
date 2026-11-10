@@ -85,6 +85,12 @@ endpoints change without notice. The RPO move in June 2026 broke many integratio
   from `ds_dphs`. `ds_dphv` lists removals from the §52(6) risk list, not VAT cancellations.
 - **The files regenerate** around 01:36–01:52 UTC.
 - **Do not download the ZIPs in a loop.** Use a conditional GET with the stored ETag.
+- **Keys (implemented):** `ds_dsrdp` and `ds_iz_ran` by DIČ; `ds_dphs` by IČ DPH plus the member's
+  IČO (else its name: VAT groups share an IČ DPH); `ds_dphz` by IČ DPH + publication date; `ds_dphv`
+  by IČ DPH + publication + removal date; `ds_dpho` by IČ DPH + start + **end date** (one subject can
+  have several special-scheme periods with the same start date).
+- **IČO in the FS lists** is not always 8 digits (2026-11: 892 in `ds_dsrdp`, mostly 12-digit
+  numbers; 26 in `ds_dphs`). Such values are treated as "no IČO".
 
 ## RÚZ (not in v1, decision D16; kept for v2)
 
