@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is the process configuration. Later stages add fields here.
@@ -41,6 +42,20 @@ type Config struct {
 	// FSMaxDrop overrides every FS list's drop threshold when set (REGISTER_FS_MAX_DROP; default:
 	// 0.03 for ds_dsrdp, ds_dphs, ds_iz_ran and 0.20 for the small lists).
 	FSMaxDrop float64
+
+	// serve
+	Listen          string        // REGISTER_LISTEN, ":8080"
+	APIKeys         string        // REGISTER_API_KEYS (secret): "name:sha256hex,name2:sha256hex"
+	AllowAnonymous  bool          // REGISTER_ALLOW_ANONYMOUS, false
+	SearchFuzzy     bool          // REGISTER_SEARCH_FUZZY, true
+	RatePerSecond   float64       // REGISTER_RATE_PER_SECOND, 20 (per key, per instance)
+	RateBurst       int           // REGISTER_RATE_BURST, 40
+	FuzzyEvery      time.Duration // REGISTER_FUZZY_EVERY, 5s: one fuzzy search per key per interval (burst 2)
+	FuzzyConcurrent int           // REGISTER_FUZZY_CONCURRENCY, 1 (per instance)
+	FuzzyTimeout    time.Duration // REGISTER_FUZZY_TIMEOUT, 2s
+	QueryTimeout    time.Duration // REGISTER_QUERY_TIMEOUT, 3s: default search and lookup
+	WordStepMax     int           // REGISTER_SEARCH_WORD_STEP_MAX, 1000
+	WordCap         int           // REGISTER_SEARCH_WORD_CAP, 1000
 }
 
 // Env abstracts the process environment for tests.
@@ -136,6 +151,9 @@ func Load(e Env) (Config, error) {
 			return c, fmt.Errorf("REGISTER_FS_MAX_DROP: %w", err)
 		}
 	}
+	if err := c.loadServe(e); err != nil {
+		return c, err
+	}
 	switch lvl := strings.ToLower(e.Getenv("REGISTER_LOG_LEVEL")); lvl {
 	case "", "info":
 		c.LogLevel = slog.LevelInfo
@@ -171,4 +189,78 @@ func ratio(s string, def float64) (float64, error) {
 		return 0, fmt.Errorf("want a number in (0, 1], got %q", s)
 	}
 	return f, nil
+}
+
+func boolVar(e Env, name string, def bool) (bool, error) {
+	v := strings.ToLower(e.Getenv(name))
+	switch v {
+	case "":
+		return def, nil
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s: want true or false, got %q", name, v)
+}
+
+func durationVar(e Env, name string, def time.Duration) (time.Duration, error) {
+	v := e.Getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s: want a duration such as 2s, got %q", name, v)
+	}
+	return d, nil
+}
+
+func (c *Config) loadServe(e Env) error {
+	var err error
+	if c.Listen = e.Getenv("REGISTER_LISTEN"); c.Listen == "" {
+		c.Listen = ":8080"
+	}
+	if c.APIKeys, err = e.Secret("REGISTER_API_KEYS"); err != nil {
+		return err
+	}
+	if c.AllowAnonymous, err = boolVar(e, "REGISTER_ALLOW_ANONYMOUS", false); err != nil {
+		return err
+	}
+	if c.SearchFuzzy, err = boolVar(e, "REGISTER_SEARCH_FUZZY", true); err != nil {
+		return err
+	}
+	if v := e.Getenv("REGISTER_RATE_PER_SECOND"); v == "" {
+		c.RatePerSecond = 20
+	} else if c.RatePerSecond, err = strconv.ParseFloat(v, 64); err != nil || c.RatePerSecond <= 0 {
+		return fmt.Errorf("REGISTER_RATE_PER_SECOND: want a positive number, got %q", v)
+	}
+	for _, v := range []struct {
+		name string
+		dst  *int
+		def  int
+	}{
+		{"REGISTER_RATE_BURST", &c.RateBurst, 40},
+		{"REGISTER_FUZZY_CONCURRENCY", &c.FuzzyConcurrent, 1},
+		{"REGISTER_SEARCH_WORD_STEP_MAX", &c.WordStepMax, 1000},
+		{"REGISTER_SEARCH_WORD_CAP", &c.WordCap, 1000},
+	} {
+		if *v.dst, err = positiveInt(e.Getenv(v.name), v.def); err != nil {
+			return fmt.Errorf("%s: %w", v.name, err)
+		}
+	}
+	for _, v := range []struct {
+		name string
+		dst  *time.Duration
+		def  time.Duration
+	}{
+		{"REGISTER_FUZZY_EVERY", &c.FuzzyEvery, 5 * time.Second},
+		{"REGISTER_FUZZY_TIMEOUT", &c.FuzzyTimeout, 2 * time.Second},
+		{"REGISTER_QUERY_TIMEOUT", &c.QueryTimeout, 3 * time.Second},
+	} {
+		if *v.dst, err = durationVar(e, v.name, v.def); err != nil {
+			return err
+		}
+	}
+	return nil
 }

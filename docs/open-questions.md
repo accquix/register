@@ -15,3 +15,6 @@ before the first production use (D30); OQ-3, 4, 10 and 12 are deferred.
 | OQ-12 | Copyright holder in NOTICE: "The Accquix Register Authors" for now. Switch to the company name once the company exists? | Yes |
 | OQ-16 | **Search relevance test set** (exact name first, shorter names first, typos, same names of different subjects) | Synthetic fixtures in the repo; real-data checks run locally only |
 | OQ-21 | **Capacity on a 1/8–1/4 vCPU database:** about 30 vs 75–140 default searches a second when saturated (Docker limits) | Confirm on the real tier with an open-loop test |
+| OQ-22 | **sqlc (D12) is not used.** The queries are dynamic or bulk (COPY, staged merges, the adaptive word step), and are covered by integration tests against PostgreSQL | Drop sqlc from D12; keep pgx with integration tests |
+| OQ-23 | **`active=false` search and keyset `cursor` paging** (architecture v1) are not implemented: the search layer holds active subjects only, and results are capped at 20 | Defer to v1.1, if a consumer needs them |
+

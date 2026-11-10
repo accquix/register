@@ -14,6 +14,8 @@ This page lists what is implemented so far. It grows with each stage.
 | `accquix-register migrate down-to N` | Rolls back to version N (0 = empty schema) |
 | `accquix-register sync [--source rpo\|fs\|all]` | One sync pass (default `all`): the Register of Legal Entities (bootstrap, monthly reconcile, daily files) and the six Financial Administration lists. Safe to run often: a pass with nothing new costs a few requests (about 1–2 s) |
 | `accquix-register sync --unblock --source rpo` or `--source fs:<list>` | After a validation block: restores the previous state. Run it once the cause is understood |
+| `accquix-register serve` | The read-only HTTP API (see below) |
+| `accquix-register openapi` | Prints the OpenAPI 3.1 document; the committed copy is `api/openapi.yaml` |
 | `accquix-register version` | Prints the version |
 
 Exit codes: `0` success (also when another sync holds the lock), `1` failure (including a blocked
@@ -36,6 +38,27 @@ source), `2` a command-line mistake.
 | `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: absence marking is blocked when more than this share of active records would be marked |
 | `REGISTER_FS_BASE_URL` | `https://report.financnasprava.sk` | Base URL of the Financial Administration list exports |
 | `REGISTER_FS_MAX_DROP` | per list | Overrides every FS list's threshold for a drop in rows and for rows marked absent. Defaults: 0.03 for `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0.20 for `ds_dphz`, `ds_dphv`, `ds_dpho` |
+
+### serve
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REGISTER_LISTEN` | `:8080` | Listen address |
+| `REGISTER_API_KEYS` (secret) | — | `name:sha256hex,name2:sha256hex`: hashes of the keys, never the keys. Hash a key with `printf %s "$KEY" \| sha256sum`. Clients send `Authorization: Bearer <key>` |
+| `REGISTER_ALLOW_ANONYMOUS` | `false` | Without keys, `serve` refuses to start unless this is `true`. Anonymous callers are rate-limited per IP; lookup of natural persons without an IČO by DIČ is then unavailable (D26) |
+| `REGISTER_SEARCH_FUZZY` | `true` | Enables `mode=fuzzy`. When `false`, it answers `400 fuzzy_disabled` and `/v1/capabilities` says so |
+| `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket per caller, per instance |
+| `REGISTER_FUZZY_EVERY` | `5s` | One fuzzy search per caller per interval (burst 2) |
+| `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches running at once, **per instance**: with several replicas, set a conservative value per replica (D18) |
+| `REGISTER_FUZZY_TIMEOUT` | `2s` | A slower fuzzy search answers `503 timeout` |
+| `REGISTER_QUERY_TIMEOUT` | `3s` | The same for default search and lookup |
+| `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | The adaptive word step (D17) |
+
+Endpoints: `GET /v1/search`, `GET /v1/lookup/{id}`, `POST /v1/lookup:batch`, `GET /v1/sources`,
+`GET /v1/capabilities` (key required); `/livez`, `/readyz`, `/openapi.json`, `/openapi.yaml`
+(public). `/readyz` and the data endpoints answer `503 bootstrapping` until every source is first
+published. Errors are `application/problem+json` with a stable `code`. The access log records the
+route, status, duration and key name only.
 
 ## How a sync pass behaves (RPO)
 

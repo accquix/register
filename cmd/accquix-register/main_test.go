@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -23,7 +24,8 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{"version"}, 0, "dev"},
 		{[]string{"help"}, 0, "modes:"},
 		{[]string{"nope"}, 2, "unknown mode"},
-		{[]string{"serve"}, 1, "not implemented"},
+		{[]string{"serve"}, 1, "no API keys"},
+		{[]string{"openapi"}, 0, "openapi: 3.1"},
 		{[]string{"sync"}, 1, "REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required"},
 		{[]string{"sync", "--source", "nope"}, 2, "unknown source"},
 		{[]string{"sync", "--unblock", "--source", "fs"}, 2, "--unblock needs"},
@@ -57,5 +59,21 @@ func TestRunMigrateBadArgs(t *testing.T) {
 		if code := run(context.Background(), args, &out, &errb, env); code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, code)
 		}
+	}
+}
+
+// The committed api/openapi.yaml must match the generated document (regenerate with
+// `go run ./cmd/accquix-register openapi > api/openapi.yaml`).
+func TestOpenAPIUpToDate(t *testing.T) {
+	var out bytes.Buffer
+	if err := runOpenAPI(&out); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out.Bytes(), committed) {
+		t.Fatal("api/openapi.yaml is out of date: run `go run ./cmd/accquix-register openapi > api/openapi.yaml`")
 	}
 }
