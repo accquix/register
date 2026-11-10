@@ -1,0 +1,23 @@
+# Build output
+/bin/
+/dist/
+/accquix-register
+
+# Downloaded source data: never committed (code only, never data)
+/data/
+/downloads/
+*.json.gz
+*.zip
+!testdata/**
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+
+# Tooling
+.DS_Store
+*.test
+*.out
+coverage.*
