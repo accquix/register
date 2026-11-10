@@ -3,8 +3,12 @@
 # Existing files are never overwritten.
 set -eu
 cd "$(dirname "$0")"
+# The directory is private (0700); the files inside must be readable (0644) because compose
+# bind-mounts them as they are and the containers do not run as your user (the register runs as
+# uid 65532). Other users of the host cannot reach them through the private directory.
 mkdir -p secrets
-umask 077
+chmod 700 secrets
+umask 022
 if [ ! -f secrets/postgres_password ]; then
   head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > secrets/postgres_password
 fi
@@ -18,4 +22,5 @@ if [ ! -f secrets/api_keys ]; then
   printf 'default:%s' "$hash" > secrets/api_keys
   echo "API key (shown once, store it now): $key"
 fi
+chmod 644 secrets/postgres_password secrets/database_url secrets/api_keys
 echo "secrets ready in $(pwd)/secrets"

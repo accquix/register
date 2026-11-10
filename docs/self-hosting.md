@@ -44,6 +44,11 @@ curl -s localhost:8080/readyz
 curl -s -H "Authorization: Bearer <key>" "localhost:8080/v1/search?q=tatra%20banka"
 ```
 
+`make-secrets.sh` keeps `secrets/` private (mode 0700) and makes the files inside readable (0644):
+compose mounts them as they are, and the containers do not run as your user. If you write the
+files yourself, do the same, or the register fails with `permission denied` on
+`/run/secrets/...`.
+
 The API answers `503 bootstrapping` until the first sync has published every source. The API is
 published on `127.0.0.1:8080`; set `REGISTER_PUBLISH=0.0.0.0:8080` only behind your own TLS
 proxy.
