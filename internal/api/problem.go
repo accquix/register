@@ -16,7 +16,7 @@ type Problem struct {
 	Status int                 `json:"status" doc:"HTTP status code"`
 	Detail string              `json:"detail,omitempty" doc:"Explanation specific to this occurrence"`
 	Code   string              `json:"code" doc:"Stable error code: invalid_request, invalid_identifier, unauthorized, forbidden, not_found, rate_limited, fuzzy_disabled, unavailable, internal"`
-	Reason string              `json:"reason,omitempty" doc:"For unavailable: bootstrapping, source_stale, timeout, database"`
+	Reason string              `json:"reason,omitempty" doc:"For unavailable: bootstrapping, setup, source_stale, timeout, database"`
 	Errors []*huma.ErrorDetail `json:"errors,omitempty" doc:"Validation details"`
 }
 

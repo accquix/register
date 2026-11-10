@@ -138,11 +138,13 @@ type Bucket struct {
 	Gets    map[string]int // GET count per key
 	// FailNext makes the next GET of a key fail after writing that many bytes (simulates a drop).
 	FailNext map[string]int
+	// Modified overrides the listed LastModified of a key (default: long ago, 2020-01-01).
+	Modified map[string]time.Time
 }
 
 // NewBucket starts a fake bucket; it is closed when the test ends.
 func NewBucket(t *testing.T) *Bucket {
-	b := &Bucket{objects: map[string][]byte{}, Gets: map[string]int{}, FailNext: map[string]int{}}
+	b := &Bucket{objects: map[string][]byte{}, Gets: map[string]int{}, FailNext: map[string]int{}, Modified: map[string]time.Time{}}
 	b.Server = httptest.NewServer(http.HandlerFunc(b.serve))
 	t.Cleanup(b.Server.Close)
 	return b
@@ -182,14 +184,17 @@ func (b *Bucket) PutSnapshot(date string, recs []Rec, partSize int) {
 	b.Put("batch-init/init_"+date+"_list.txt", []byte(strings.Join(names, "\n")+"\n"))
 }
 
+type listEntry struct {
+	Key          string `xml:"Key"`
+	Size         int    `xml:"Size"`
+	LastModified string `xml:"LastModified"`
+}
+
 type listXML struct {
-	XMLName  xml.Name `xml:"ListBucketResult"`
-	Contents []struct {
-		Key  string `xml:"Key"`
-		Size int    `xml:"Size"`
-	} `xml:"Contents"`
-	IsTruncated           bool   `xml:"IsTruncated"`
-	NextContinuationToken string `xml:"NextContinuationToken,omitempty"`
+	XMLName               xml.Name    `xml:"ListBucketResult"`
+	Contents              []listEntry `xml:"Contents"`
+	IsTruncated           bool        `xml:"IsTruncated"`
+	NextContinuationToken string      `xml:"NextContinuationToken,omitempty"`
 }
 
 func (b *Bucket) serve(w http.ResponseWriter, r *http.Request) {
@@ -208,10 +213,11 @@ func (b *Bucket) serve(w http.ResponseWriter, r *http.Request) {
 		end := min(start+2, len(keys))
 		var out listXML
 		for _, k := range keys[start:end] {
-			out.Contents = append(out.Contents, struct {
-				Key  string `xml:"Key"`
-				Size int    `xml:"Size"`
-			}{k, len(b.objects[k])})
+			mod, ok := b.Modified[k]
+			if !ok {
+				mod = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+			}
+			out.Contents = append(out.Contents, listEntry{k, len(b.objects[k]), mod.UTC().Format("2006-01-02T15:04:05.000Z")})
 		}
 		if end < len(keys) {
 			out.IsTruncated, out.NextContinuationToken = true, strconv.Itoa(end)

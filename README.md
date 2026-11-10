@@ -29,6 +29,7 @@ commercial API subscription and no vendor lock-in.
 ```sh
 git clone https://github.com/accquix/register && cd register/deploy/compose
 ./make-secrets.sh && docker compose up -d
+docker compose run --rm operator suppress --init-empty   # a new installation: no objections to restore
 ```
 
 The first sync downloads about 1 GB and takes 10–20 minutes. Then:

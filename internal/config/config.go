@@ -23,6 +23,12 @@ type Config struct {
 	// SyncDatabaseURL is used by the sync mode (REGISTER_SYNC_DATABASE_URL, secret). It must be a
 	// direct connection, not a transaction pooler (advisory lock, COPY). When unset, DatabaseURL.
 	SyncDatabaseURL string
+	// OperatorDatabaseURL is used by the suppress mode (REGISTER_OPERATOR_DATABASE_URL, secret): the
+	// role that may change objections. When unset, SyncDatabaseURL.
+	OperatorDatabaseURL string
+	// RoleAPI, RoleSync and RoleOperator name the database roles that migrate grants rights to
+	// (REGISTER_DB_ROLE_API, _SYNC, _OPERATOR). Unset: migrate grants nothing for that role.
+	RoleAPI, RoleSync, RoleOperator string
 	// LogLevel is REGISTER_LOG_LEVEL: debug, info (default), warn or error.
 	LogLevel slog.Level
 
@@ -41,8 +47,11 @@ type Config struct {
 	// (REGISTER_RPO_DATE_SKEW_DAYS, 1).
 	RPODateSkewDays int
 	// RPOBootstrapMinRecords: a first snapshot with fewer records is not published
-	// (REGISTER_RPO_BOOTSTRAP_MIN_RECORDS, 2000000).
+	// (REGISTER_RPO_BOOTSTRAP_MIN_RECORDS, 2200000).
 	RPOBootstrapMinRecords int
+	// RPOSnapshotSettle: a snapshot is used once its newest file is this old
+	// (REGISTER_RPO_SNAPSHOT_SETTLE, 2h).
+	RPOSnapshotSettle time.Duration
 	// FSBaseURL serves the Financial Administration list exports (REGISTER_FS_BASE_URL).
 	FSBaseURL string
 	// FSMaxDrop overrides every FS list's drop threshold when set (REGISTER_FS_MAX_DROP; default:
@@ -64,6 +73,41 @@ type Config struct {
 	QueryTimeout    time.Duration // REGISTER_QUERY_TIMEOUT, 3s: default search and lookup
 	WordStepMax     int           // REGISTER_SEARCH_WORD_STEP_MAX, 1000
 	WordCap         int           // REGISTER_SEARCH_WORD_CAP, 1000
+}
+
+// DefaultRPOBootstrapMinRecords is the floor of a first RPO publication: about 96 % of the
+// register's size on 2026-11-07 (2.28 M records). Review it as the register grows.
+const DefaultRPOBootstrapMinRecords = 2_200_000
+
+// Overrides lists the validation settings that differ from the defaults. The sync logs them on
+// every pass, so that a loosened check is never in effect unnoticed.
+func (c Config) Overrides() []string {
+	var out []string
+	if c.RPOBootstrapMinRecords != DefaultRPOBootstrapMinRecords {
+		out = append(out, fmt.Sprintf("REGISTER_RPO_BOOTSTRAP_MIN_RECORDS=%d", c.RPOBootstrapMinRecords))
+	}
+	if c.FSSkipMinRows {
+		out = append(out, "REGISTER_FS_SKIP_MIN_ROWS=true")
+	}
+	if c.FSMaxDrop > 0 {
+		out = append(out, fmt.Sprintf("REGISTER_FS_MAX_DROP=%g", c.FSMaxDrop))
+	}
+	if c.RPODateSkewDays != 1 {
+		out = append(out, fmt.Sprintf("REGISTER_RPO_DATE_SKEW_DAYS=%d", c.RPODateSkewDays))
+	}
+	if c.RPOSnapshotSettle != 2*time.Hour {
+		out = append(out, "REGISTER_RPO_SNAPSHOT_SETTLE="+c.RPOSnapshotSettle.String())
+	}
+	if c.RPOSnapshotMinRatio != 0.98 {
+		out = append(out, fmt.Sprintf("REGISTER_RPO_SNAPSHOT_MIN_RATIO=%g", c.RPOSnapshotMinRatio))
+	}
+	if c.AbsenceMaxRatio != 0.005 {
+		out = append(out, fmt.Sprintf("REGISTER_ABSENCE_MAX_RATIO=%g", c.AbsenceMaxRatio))
+	}
+	if c.RPODailyMaxRecords != 20_000 {
+		out = append(out, fmt.Sprintf("REGISTER_RPO_DAILY_MAX_RECORDS=%d", c.RPODailyMaxRecords))
+	}
+	return out
 }
 
 // Env abstracts the process environment for tests.
@@ -115,6 +159,13 @@ func Load(e Env) (Config, error) {
 	if c.SyncDatabaseURL == "" {
 		c.SyncDatabaseURL = c.DatabaseURL
 	}
+	if c.OperatorDatabaseURL, err = e.Secret("REGISTER_OPERATOR_DATABASE_URL"); err != nil {
+		return c, err
+	}
+	if c.OperatorDatabaseURL == "" {
+		c.OperatorDatabaseURL = c.SyncDatabaseURL
+	}
+	c.RoleAPI, c.RoleSync, c.RoleOperator = e.Getenv("REGISTER_DB_ROLE_API"), e.Getenv("REGISTER_DB_ROLE_SYNC"), e.Getenv("REGISTER_DB_ROLE_OPERATOR")
 	c.RPOBucketURL = e.Getenv("REGISTER_RPO_BUCKET_URL")
 	if c.RPOBucketURL == "" {
 		c.RPOBucketURL = "https://frkqbrydxwdp.compat.objectstorage.eu-frankfurt-1.oraclecloud.com/susr-rpo"
@@ -132,7 +183,7 @@ func Load(e Env) (Config, error) {
 		{"REGISTER_RPO_PART_RECORDS", &c.RPOPartRecords, 100_000},
 		{"REGISTER_RPO_DAILY_MAX_RECORDS", &c.RPODailyMaxRecords, 20_000},
 		{"REGISTER_RPO_DATE_SKEW_DAYS", &c.RPODateSkewDays, 1},
-		{"REGISTER_RPO_BOOTSTRAP_MIN_RECORDS", &c.RPOBootstrapMinRecords, 2_000_000},
+		{"REGISTER_RPO_BOOTSTRAP_MIN_RECORDS", &c.RPOBootstrapMinRecords, DefaultRPOBootstrapMinRecords},
 	}
 	for _, v := range ints {
 		if *v.dst, err = positiveInt(e.Getenv(v.name), v.def); err != nil {
@@ -162,6 +213,9 @@ func Load(e Env) (Config, error) {
 		}
 	}
 	if c.FSSkipMinRows, err = boolVar(e, "REGISTER_FS_SKIP_MIN_ROWS", false); err != nil {
+		return c, err
+	}
+	if c.RPOSnapshotSettle, err = durationVar(e, "REGISTER_RPO_SNAPSHOT_SETTLE", 2*time.Hour); err != nil {
 		return c, err
 	}
 	if err := c.loadServe(e); err != nil {

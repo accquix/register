@@ -13,13 +13,16 @@ description: Referenčné nasadenie, jeho služby, tajomstvá a nastavenia.
 | `serve` | `accquix-register serve` | Beží trvalo; API na porte 8080 |
 
 `sync` a `serve` sa spustia až po úspešnom `migrate`.
+API je pripravené, keď prvá synchronizácia zverejní všetky zdroje **a** potvrdíte námietky inštalácie:
+`suppress --init-empty` na novej, `suppress --restore` na znova zostavenej (pozrite
+[Databáza](/sk/self-hosting/database)).
 
 ## Tajomstvá
 
 Žiadne predvolené prihlasovacie údaje neexistujú. `make-secrets.sh` vytvorí súbory v `secrets/`. Každý proces má
-vlastnú databázovú rolu a dostane len svoje tajomstvo: `migrate` vlastní schému, `sync` číta a zapisuje tabuľky,
-`serve` môže len čítať. Roly sa vytvoria pri prvom štarte PostgreSQL; žiadny proces registra sa nepripája ako
-superpoužívateľ.
+vlastnú databázovú rolu a dostane len svoje tajomstvo: `migrate` vlastní schému, `sync` zapisuje zrkadlo, `operator`
+mení námietky, `serve` môže len čítať zverejnené dáta. Roly sa vytvoria pri prvom štarte PostgreSQL; žiadny proces
+registra sa nepripája ako superpoužívateľ.
 
 <FileTree>
 - deploy/compose/
@@ -27,9 +30,10 @@ superpoužívateľ.
   - make-secrets.sh
   - secrets/
     - postgres_password (superpoužívateľ: pre vás, nikdy pre register)
-    - migrate_password, sync_password, api_password
+    - migrate_password, sync_password, operator_password, api_password
     - migrate_database_url
     - sync_database_url
+    - operator_database_url
     - database_url (rola API)
     - api_keys
 </FileTree>
@@ -57,6 +61,24 @@ docker compose logs -f sync                       # sledovať synchronizáciu
 docker compose exec serve accquix-register version
 docker compose run --rm sync sync --source fs     # jeden prechod navyše pre zoznamy FS
 docker compose down                               # zastaviť; dáta zostanú vo zväzku pgdata
-docker compose run --rm -T sync suppress --list > objections.tsv   # zálohovať námietky
-docker compose down -v                            # zastaviť a zmazať dáta: najprv zálohujte námietky
+docker compose run --rm operator suppress --init-empty             # raz, na novej inštalácii
+docker compose run --rm operator suppress --subject 99900004 --reason "tiket 123"
+docker compose run --rm operator suppress --list
+docker compose run --rm -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv
+docker compose down -v                            # zastaviť a zmazať dáta: najprv exportujte námietky
+```
+
+`operator` sa príkazom `docker compose up` nespúšťa; vykoná jeden príkaz `suppress` a skončí. Priečinok na zálohu
+musí byť zapisovateľný pre uid 65532.
+
+## Prechod zo schémy s jednou rolou
+
+Nasadenie vytvorené pred oddelením rolí používalo pre každý proces jedného superpoužívateľa. Prechod so zachovaním
+dát, námietok a API kľúčov:
+
+```sh
+docker compose down            # zväzok pgdata zostane
+./make-secrets.sh --upgrade    # pridá nové súbory s tajomstvami; starú URL superpoužívateľa odloží
+./upgrade-roles.sh             # vytvorí roly a odovzdá databázu role register_migrate
+docker compose up -d
 ```

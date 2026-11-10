@@ -46,13 +46,16 @@ lookup by identifier keeps working:
 
 ```sh
 accquix-register suppress --subject 99900004 --reason "ticket 123"
-accquix-register suppress --subject 99900004 --undo
+accquix-register suppress --list                       # every objection with its number
+accquix-register suppress --undo --id 1                # revoke one objection
 ```
 
-The suppression is kept by IČO, so a new RPO record of the same person stays suppressed; it also follows a record
-that gains or loses its IČO. Back the list up after every change (`suppress --list`, see
-[Database](/self-hosting/database)): it is the only data a rebuild cannot restore. Do not put personal data
-into `--reason`.
+Each objection has a number. It hides the records that carry the IČO, the records that carried it when the objection
+was recorded, and records later created with it; a record stays hidden when it loses or changes its IČO. Nothing is
+copied onto other identifiers, so a wrong IČO in a source file never hides another subject for good. An undo revokes
+one objection and tells you if another still hides the subject. Export the objections after every change
+(`suppress --export`, see [Database](/self-hosting/database#back-up-the-objections)): they are the only data a
+rebuild cannot restore. Do not put personal data into `--reason`.
 
 ## Upgrades
 

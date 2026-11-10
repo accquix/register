@@ -67,12 +67,14 @@ subject/search layer that `sync` maintains in the same unit transaction.
   the adaptive word step and the fuzzy correction.
 - After each unit, `sync` recomputes these rows for the subjects the unit touched.
 - Only active subjects are in the search layer; terminated subjects are reachable by exact lookup.
-  A subject listed in `search_suppression` (an objection, keyed by subject key) is left out of the
-  search layer only. Because a subject key changes when a record gains or loses an IČO, the sync
-  keeps the table closed over both forms (a suppressed IČO covers every record that carries it; a
-  suppressed record covers the IČO it carries), the search queries filter on it again, and fuzzy
-  search never offers a word that only suppressed subjects use. Changes to the table and rebuilds
-  of search rows are serialised by a table lock.
+  Records covered by an active objection are left out of the search layer only (D31). An
+  objection (`objection`) names an IČO or one RPO record and is anchored (`objection_record`) to
+  the records that carried the IČO when it was recorded and to records later created with it. A
+  record is hidden when an active objection names its current IČO, names the record, or is
+  anchored to it. This is computed per record from the current data; nothing is copied onto other
+  identifiers. The search queries filter on the suppressed keys again, and fuzzy search never
+  offers a word that only suppressed subjects use. Changes to objections and rebuilds of search
+  rows are serialised by an advisory lock.
 
 ### Normalisation rules (pure Go, shared by ingest and search)
 
@@ -234,11 +236,13 @@ temporary file first, because a ZIP's index is at the end. Set `GOMEMLIMIT`.
 - **Terminated subjects:** available by exact lookup, left out of the default search.
 - **Natural persons without an IČO:** never in name search; exact DIČ only, minimal fields,
   authenticated keys only (D26).
-- **Objections:** `accquix-register suppress --subject <IČO>` adds the subject to `search_suppression`
-  (and `--undo` removes it). The person stays reachable by exact
-  identifier and disappears from name search. The objection follows the subject when its key
-  changes. The table is the only state that cannot be rebuilt from the sources:
-  `suppress --list` exports it and `suppress --restore` puts it back before the first sync.
+- **Objections:** `accquix-register suppress --subject <IČO>` records an objection; the person
+  stays reachable by exact identifier and disappears from name search. `--undo --id N` revokes
+  one objection and keeps the row as the record of the undo. The objections are the only state
+  that cannot be rebuilt from the sources: `suppress --export` writes the backup,
+  `suppress --restore` puts it back, and the API does not serve until the operator confirmed the
+  objections of the installation (restored, or a new installation with none; D32). A separate
+  operator role changes them (D33); the API role sees only which keys are suppressed.
 - **The deployer is the controller.** `docs/self-hosting.md` will say so (to write).
 
 ## Deployment
@@ -259,8 +263,8 @@ temporary file first, because a ZIP's index is at the end. Set `GOMEMLIMIT`.
 | First run | about 10–20 min, mostly downloading | — |
 
 - **Backups:** the register data can always be rebuilt from the official sources, and versions are
-  content hashes, so a rebuild yields the same versions. The objections (`search_suppression`)
-  cannot: they must be backed up and restored before the sync of a rebuilt database
+  content hashes, so a rebuild yields the same versions. The objections cannot: they must be
+  backed up and restored into a rebuilt database, and the API stays unavailable until then
   (`docs/self-hosting.md`).
 - **Alerts:** daily RPO not applied for 24 h; last applied daily older than 30 days; an FS list
   older than 2 days (`ds_iz_ran` 14); a source `blocked`. `/v1/sources` and `/readyz` expose all of
@@ -276,10 +280,11 @@ up to about 30 minutes) can host it, against any PostgreSQL. Deployment guides t
 - **Cloudflare Containers:** possible, but as of 2026-11 the least convenient (deprecated default
   scheduler, 15-minute cron limit, no static egress IP or city pinning).
 
-**Database roles:** an API role with SELECT only, which can go through a transaction pooler; a sync
-role with write rights, on a direct connection (advisory lock, COPY); a migration role for DDL. Use
-TLS `verify-full` to managed databases. The reference compose creates exactly these roles; no
-process connects as a superuser.
+**Database roles:** an API role that reads the published data, which can go through a transaction
+pooler; a sync role that writes the mirror, on a direct connection (advisory lock, COPY); an
+operator role for objections; a migration role for DDL, which also grants the others their table
+rights (`REGISTER_DB_ROLE_*`, D33). Use TLS `verify-full` to managed databases. The reference
+compose creates exactly these roles; no process connects as a superuser.
 
 **Scaling:** add `serve` replicas behind a connection pooler and size the database CPU by
 measured load. The fuzzy concurrency limit is per replica (D18).

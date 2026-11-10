@@ -8,8 +8,9 @@ import (
 
 // Object is one file in the bucket.
 type Object struct {
-	Key  string
-	Size int64
+	Key      string
+	Size     int64
+	Modified time.Time // LastModified from the listing; zero when the bucket did not say
 }
 
 var (
@@ -29,30 +30,55 @@ type Snapshot struct {
 type Inventory struct {
 	Dailies   map[string]Object // "YYYY-MM-DD" → object
 	Snapshots map[string]*Snapshot
+	// Invalid lists keys that look like register files but carry an impossible date
+	// (init_2026-02-31_…). They are never used; the sync reports them.
+	Invalid []string
 }
 
-// Classify sorts a bucket listing into daily files and snapshots. Unknown keys are ignored.
+// calendarDate parses YYYY-MM-DD strictly: 2026-02-31 matches the pattern but is not a date.
+func calendarDate(s string) (time.Time, bool) {
+	d, err := time.Parse("2006-01-02", s)
+	return d, err == nil && d.Year() >= 2000
+}
+
+// Classify sorts a bucket listing into daily files and snapshots. Unknown keys are ignored; keys
+// with an impossible date are set aside in Invalid.
 func Classify(objs []Object) Inventory {
 	inv := Inventory{Dailies: map[string]Object{}, Snapshots: map[string]*Snapshot{}}
 	snap := func(day string) *Snapshot {
+		d, ok := calendarDate(day)
+		if !ok {
+			return nil
+		}
 		s := inv.Snapshots[day]
 		if s == nil {
-			d, _ := time.Parse("2006-01-02", day)
 			s = &Snapshot{Date: d, Parts: map[string]Object{}}
 			inv.Snapshots[day] = s
 		}
 		return s
 	}
 	for _, o := range objs {
+		ok := true
 		switch {
 		case reDaily.MatchString(o.Key):
-			inv.Dailies[reDaily.FindStringSubmatch(o.Key)[1]] = o
+			day := reDaily.FindStringSubmatch(o.Key)[1]
+			if _, ok = calendarDate(day); ok {
+				inv.Dailies[day] = o
+			}
 		case rePart.MatchString(o.Key):
-			m := rePart.FindStringSubmatch(o.Key)
-			snap(m[1]).Parts[o.Key[len("batch-init/"):]] = o
+			s := snap(rePart.FindStringSubmatch(o.Key)[1])
+			if ok = s != nil; ok {
+				s.Parts[o.Key[len("batch-init/"):]] = o
+			}
 		case reManifest.MatchString(o.Key):
-			obj := o
-			snap(reManifest.FindStringSubmatch(o.Key)[1]).Manifest = &obj
+			s := snap(reManifest.FindStringSubmatch(o.Key)[1])
+			if ok = s != nil; ok {
+				obj := o
+				s.Manifest = &obj
+			}
+		}
+		if !ok {
+			inv.Invalid = append(inv.Invalid, o.Key)
 		}
 	}
 	return inv
@@ -62,8 +88,7 @@ func Classify(objs []Object) Inventory {
 func KeyDate(key string) (time.Time, bool) {
 	for _, re := range []*regexp.Regexp{reDaily, rePart} {
 		if m := re.FindStringSubmatch(key); m != nil {
-			d, err := time.Parse("2006-01-02", m[1])
-			return d, err == nil
+			return calendarDate(m[1])
 		}
 	}
 	return time.Time{}, false

@@ -47,8 +47,12 @@ type RPOConfig struct {
 	DateSkewDays int
 	// BootstrapMinRecords: a first snapshot with fewer records is not published (0 = no minimum).
 	BootstrapMinRecords int
-	Now                 func() time.Time // default time.Now
-	Log                 *slog.Logger
+	// SnapshotSettle: a snapshot is used only when its newest file has been in the bucket for this
+	// long (default 2 h), so a set that is still being published is not taken for complete.
+	// Negative disables the check.
+	SnapshotSettle time.Duration
+	Now            func() time.Time // default time.Now
+	Log            *slog.Logger
 }
 
 func (c *RPOConfig) defaults() {
@@ -72,6 +76,9 @@ func (c *RPOConfig) defaults() {
 	}
 	if c.Now == nil {
 		c.Now = time.Now
+	}
+	if c.SnapshotSettle == 0 {
+		c.SnapshotSettle = 2 * time.Hour
 	}
 	if c.Log == nil {
 		c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -237,6 +244,9 @@ func (s *RPO) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(inv.Invalid) > 0 {
+		s.cfg.Log.Warn("rpo: files with an impossible date in their name are ignored", "count", len(inv.Invalid), "first", inv.Invalid[0])
+	}
 	switch st.State {
 	case "empty", "bootstrap":
 		if err := s.bootstrap(ctx, &st, inv); err != nil {
@@ -291,7 +301,7 @@ func (s *RPO) completeSnapshot(ctx context.Context, inv rpo.Inventory, after str
 		// (the manifest is written before the last parts; a part outside it means either file is
 		// still being published).
 		var parts []rpo.Object
-		complete := len(names) == len(snap.Parts)
+		complete := len(names) == len(snap.Parts) && s.settled(snap)
 		for i, n := range names {
 			o, ok := snap.Parts[n]
 			if !ok || n != fmt.Sprintf("init_%s_%03d.json.gz", d, i+1) {
@@ -306,6 +316,25 @@ func (s *RPO) completeSnapshot(ctx context.Context, inv rpo.Inventory, after str
 		}
 	}
 	return nil, nil, "", nil
+}
+
+// settled reports whether every file of the snapshot has been in the bucket for SnapshotSettle.
+// A file without a modification time counts as not settled.
+func (s *RPO) settled(snap *rpo.Snapshot) bool {
+	if s.cfg.SnapshotSettle < 0 {
+		return true
+	}
+	limit := s.cfg.Now().Add(-s.cfg.SnapshotSettle)
+	old := func(o rpo.Object) bool { return !o.Modified.IsZero() && !o.Modified.After(limit) }
+	if snap.Manifest == nil || !old(*snap.Manifest) {
+		return false
+	}
+	for _, p := range snap.Parts {
+		if !old(p) {
+			return false
+		}
+	}
+	return true
 }
 
 func fileSHA(path string) (string, error) {
@@ -334,6 +363,11 @@ func (s *RPO) apply(ctx context.Context, obj rpo.Object, path string, u ingest.R
 	}
 	u.Open = func() (io.ReadCloser, error) { return os.Open(path) }
 	u.CheckDate = s.dateCheck(obj)
+	// Order by the date in the file name, the order the files are applied in. Ordering by the
+	// exportDate inside would let a snapshot part stamped a day late outrank the next daily file.
+	if named, ok := rpo.KeyDate(obj.Key); ok {
+		u.OrderDate = named
+	}
 	t0 := time.Now()
 	res, err := ingest.ApplyRPO(ctx, s.conn, u)
 	if err != nil {
@@ -446,10 +480,48 @@ func (s *RPO) bootstrap(ctx context.Context, st *State, inv rpo.Inventory) error
 	}
 	date := fmtDay(snap.Date)
 	if st.State == "empty" || st.BaseSnapshot != date {
-		st.State, st.BaseSnapshot = "bootstrap", date
-		if err := s.save(ctx, *st); err != nil {
+		// A bootstrap that moves to another snapshot starts over: rows of the abandoned one must
+		// not be published with it. Nothing is published yet, so emptying the table is safe.
+		if st.PublishedAsOf != "" {
+			return fmt.Errorf("rpo is in state %q but already published (%s); refusing to start a bootstrap over published data", st.State, st.PublishedAsOf)
+		}
+		tx, err := s.conn.Begin(ctx)
+		if err != nil {
 			return err
 		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `TRUNCATE rpo_record, rpo_record_stage, rpo_seen`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM sync_unit WHERE source = 'rpo'`); err != nil {
+			return err
+		}
+		st.State, st.BaseSnapshot = "bootstrap", date
+		if err := saveState(ctx, tx, "rpo", *st); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+	}
+	// The bucket keeps the previous snapshot too. The register does not shrink by a part (100 000
+	// records) or more in a month, so a new snapshot with fewer parts than that is not trusted.
+	for _, d := range inv.SnapshotDates() { // newest first
+		if d >= date {
+			continue
+		}
+		p, prevParts, _, err := s.completeSnapshot(ctx, rpo.Inventory{Snapshots: map[string]*rpo.Snapshot{d: inv.Snapshots[d]}}, "")
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			continue
+		}
+		if len(parts) < len(prevParts)-1 {
+			return fmt.Errorf("%w: snapshot %s has %d parts, the previous snapshot %s has %d",
+				ingest.ErrRejected, date, len(parts), d, len(prevParts))
+		}
+		break
 	}
 	s.cfg.Log.Info("rpo bootstrap", "snapshot", date, "parts", len(parts))
 	total, err := s.applyParts(ctx, parts, false, false)
@@ -600,6 +672,7 @@ ON CONFLICT (snapshot_date) DO UPDATE SET parts = EXCLUDED.parts, records = EXCL
 }
 
 func (s *RPO) daily(ctx context.Context, st *State, inv rpo.Inventory) error {
+	tried := map[string]bool{}
 	for {
 		// A complete snapshot newer than the base is reconciled first (monthly; it also heals gaps).
 		snap, _, _, err := s.completeSnapshot(ctx, inv, st.BaseSnapshot)
@@ -607,7 +680,14 @@ func (s *RPO) daily(ctx context.Context, st *State, inv rpo.Inventory) error {
 			return err
 		}
 		if snap != nil {
-			if err := s.reconcile(ctx, st, inv, fmtDay(snap.Date)); err != nil {
+			// One attempt per snapshot per pass: a snapshot that neither reconciles nor fails must
+			// not spin here with the sync lock held.
+			date := fmtDay(snap.Date)
+			if tried[date] {
+				return fmt.Errorf("snapshot %s did not reconcile in this pass; will retry in the next", date)
+			}
+			tried[date] = true
+			if err := s.reconcile(ctx, st, inv, date); err != nil {
 				return err
 			}
 			continue

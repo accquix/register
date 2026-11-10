@@ -3,7 +3,6 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,52 +17,45 @@ import (
 
 const skeyExpr = `CASE WHEN r.ico IS NOT NULL THEN r.ico ELSE 'r' || r.id END`
 
-// notSuppressed keeps a record out of the search layer when either form of its key is listed in
-// search_suppression: the IČO it carries, or its own RPO id. Checking both means an objection
-// still holds in the unit where a record gains or loses its IČO.
-const notSuppressed = `NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = r.ico)
-    AND NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = 'r' || r.id)`
+// notSuppressed keeps a record out of the search layer while an active objection covers it: one
+// that names the IČO the record carries now, names the record itself, or is anchored to it
+// (migration 00003). It is evaluated per record against the current data; nothing is copied to
+// other keys, so a wrong IČO in a source file never hides the subject that really owns that IČO.
+const notSuppressed = `NOT EXISTS (SELECT 1 FROM objection o WHERE o.revoked_at IS NULL AND o.ico = r.ico)
+    AND NOT EXISTS (SELECT 1 FROM objection o WHERE o.revoked_at IS NULL AND o.rpo_id = r.id)
+    AND NOT EXISTS (SELECT 1 FROM objection_record a JOIN objection o ON o.id = a.objection_id
+                    WHERE a.rpo_id = r.id AND o.revoked_at IS NULL)`
 
-// lockSuppression serialises everything that reads search_suppression to build search rows with
-// everything that changes it. Without it, an objection recorded while a unit is being applied can
-// miss the rows that unit is about to commit (and the reverse). The lock is held to the end of the
-// transaction; API reads are not blocked.
-const lockSuppression = `LOCK TABLE search_suppression IN SHARE ROW EXCLUSIVE MODE`
+// objectionLock serialises everything that reads the objections to build search rows with
+// everything that changes them. Without it, an objection recorded while a unit is being applied
+// can miss the rows that unit is about to commit (and the reverse). It is an advisory lock held to
+// the end of the transaction, so it needs no table privilege and does not block API reads.
+const objectionLock int64 = 0x4163_5265_674f_626a // "AcRegObj"
 
-// Propagation keeps search_suppression closed over both key forms (see migration 00002):
-//  1. a suppressed record ('r' || id) suppresses the IČO that record carries;
-//  2. a suppressed IČO suppresses every record that carries it.
-//
-// It always errs towards hiding. Rows it adds carry the operator's key in origin.
-const (
-	propagateToICO = `INSERT INTO search_suppression (skey, reason, origin)
-SELECT DISTINCT ON (r.ico) r.ico, x.reason, coalesce(x.origin, x.skey)
-FROM search_suppression x
-JOIN rpo_record r ON r.id = CASE WHEN x.skey ~ '^r[0-9]{1,18}$' THEN substr(x.skey, 2)::bigint END
-WHERE r.ico IS NOT NULL
-ORDER BY r.ico, x.created_at, x.skey
-ON CONFLICT (skey) DO NOTHING`
-	propagateToRecords = `INSERT INTO search_suppression (skey, reason, origin)
-SELECT DISTINCT ON (r.id) 'r' || r.id, x.reason, coalesce(x.origin, x.skey)
-FROM search_suppression x
-JOIN rpo_record r ON r.ico = x.skey
-ORDER BY r.id, x.created_at, x.skey
-ON CONFLICT (skey) DO NOTHING`
-)
-
-// syncSuppression takes the suppression lock and propagates objections. With touched set, the
-// keys it adds are also put into the temp table "touched", so their search rows are rebuilt.
-func syncSuppression(ctx context.Context, tx pgx.Tx, touched bool) error {
-	if _, err := tx.Exec(ctx, lockSuppression); err != nil {
-		return fmt.Errorf("suppression lock: %w", err)
+func lockObjections(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, objectionLock); err != nil {
+		return fmt.Errorf("objection lock: %w", err)
 	}
-	for _, stmt := range []string{propagateToICO, propagateToRecords} {
-		if touched {
-			stmt = `WITH added AS (` + stmt + ` RETURNING skey) INSERT INTO touched (skey) SELECT skey FROM added ON CONFLICT DO NOTHING`
-		}
-		if _, err := tx.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("suppression propagate: %w", err)
-		}
+	return nil
+}
+
+// anchorNewRecords anchors each active objection by IČO to the records that were created with
+// that IČO (first seen and never changed since, so they cannot have got it by a later change).
+// An existing record that changes to the IČO is hidden while it carries it, but is not anchored:
+// if that change was a mistake in the source, its correction ends the effect.
+const anchorNewRecords = `INSERT INTO objection_record (objection_id, rpo_id)
+SELECT o.id, r.id FROM objection o JOIN rpo_record r ON r.ico = o.ico
+WHERE o.revoked_at IS NULL AND r.first_seen_at = r.changed_at AND r.first_seen_at >= o.created_at
+ON CONFLICT DO NOTHING`
+
+// syncObjections takes the objection lock and anchors new records. Every writer of the search
+// tables calls it before it reads the objections.
+func syncObjections(ctx context.Context, tx pgx.Tx) error {
+	if err := lockObjections(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, anchorNewRecords); err != nil {
+		return fmt.Errorf("objection anchors: %w", err)
 	}
 	return nil
 }
@@ -97,7 +89,7 @@ func createTouched(ctx context.Context, tx pgx.Tx) error {
 // refreshTouched rebuilds the search rows of the subjects listed in the temp table "touched" and
 // recomputes the dictionary counts of every word they had or have.
 func refreshTouched(ctx context.Context, tx pgx.Tx) error {
-	if err := syncSuppression(ctx, tx, true); err != nil {
+	if err := syncObjections(ctx, tx); err != nil {
 		return err
 	}
 	stmts := []string{
@@ -126,7 +118,7 @@ ON CONFLICT (word) DO UPDATE SET freq = EXCLUDED.freq`,
 
 // RebuildSearch replaces the whole search layer from rpo_record. Used when a bootstrap publishes.
 func RebuildSearch(ctx context.Context, tx pgx.Tx) error {
-	if err := syncSuppression(ctx, tx, false); err != nil {
+	if err := syncObjections(ctx, tx); err != nil {
 		return err
 	}
 	stmts := []string{
@@ -187,7 +179,7 @@ func MarkAbsent(ctx context.Context, tx pgx.Tx, snapshot time.Time, maxRatio flo
 }
 
 // RefreshSubjects rebuilds the search rows of the given subject keys (used after an operator
-// change such as a suppression).
+// change such as an objection).
 func RefreshSubjects(ctx context.Context, tx pgx.Tx, skeys []string) error {
 	if err := createTouched(ctx, tx); err != nil {
 		return err
@@ -196,103 +188,4 @@ func RefreshSubjects(ctx context.Context, tx pgx.Tx, skeys []string) error {
 		return err
 	}
 	return refreshTouched(ctx, tx)
-}
-
-// Suppress keeps a subject (IČO, or "r<RPO id>") out of name search, or puts it back (D26 and
-// architecture "Objections"). Exact lookup by identifier is unaffected.
-//
-// It waits for a sync unit that is being applied (lockSuppression), so the objection and the search
-// rows always agree when it returns. Putting a subject back removes the operator's row and every
-// row propagated from it, whichever of them is named.
-func Suppress(ctx context.Context, conn *pgx.Conn, skey, reason string, on bool) error {
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, lockSuppression); err != nil {
-		return err
-	}
-	keys := []string{skey}
-	if on {
-		_, err = tx.Exec(ctx, `INSERT INTO search_suppression (skey, reason) VALUES ($1, nullif($2, ''))
-ON CONFLICT (skey) DO UPDATE SET reason = EXCLUDED.reason, origin = NULL`, skey, reason)
-	} else {
-		var rows pgx.Rows
-		rows, err = tx.Query(ctx, `WITH root AS (
-  SELECT coalesce((SELECT coalesce(origin, skey) FROM search_suppression WHERE skey = $1), $1) AS k)
-DELETE FROM search_suppression s USING root WHERE s.skey = root.k OR s.origin = root.k RETURNING s.skey`, skey)
-		if err == nil {
-			var removed []string
-			if removed, err = pgx.CollectRows(rows, pgx.RowTo[string]); err == nil {
-				keys = append(keys, removed...)
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-	if err := RefreshSubjects(ctx, tx, keys); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// suppressionKey is the only shape a subject key can have: an IČO or 'r' || RPO id.
-var suppressionKey = regexp.MustCompile(`^([0-9]{8}|r[0-9]{1,18})$`)
-
-// ValidSuppressionKey reports whether s is an IČO (8 digits) or "r<RPO id>".
-func ValidSuppressionKey(s string) bool { return suppressionKey.MatchString(s) }
-
-// Suppression is one row of search_suppression.
-type Suppression struct {
-	SKey      string
-	Origin    string // the operator's key when the row was added by propagation; else ""
-	Reason    string
-	CreatedAt time.Time
-}
-
-// ListSuppressions returns every objection, in key order.
-func ListSuppressions(ctx context.Context, conn *pgx.Conn) ([]Suppression, error) {
-	rows, err := conn.Query(ctx, `SELECT skey, coalesce(origin, ''), coalesce(reason, ''), created_at FROM search_suppression ORDER BY skey`)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Suppression, error) {
-		var s Suppression
-		err := r.Scan(&s.SKey, &s.Origin, &s.Reason, &s.CreatedAt)
-		return s, err
-	})
-}
-
-// RestoreSuppressions puts exported objections back (after a rebuild of the database) and rebuilds
-// the search rows of their subjects, in one transaction. Existing rows are kept; it never removes
-// an objection. It returns how many rows were added.
-func RestoreSuppressions(ctx context.Context, conn *pgx.Conn, list []Suppression) (int, error) {
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, lockSuppression); err != nil {
-		return 0, err
-	}
-	added := 0
-	keys := make([]string, 0, len(list))
-	for _, s := range list {
-		if !ValidSuppressionKey(s.SKey) || (s.Origin != "" && !ValidSuppressionKey(s.Origin)) {
-			return 0, fmt.Errorf("restore: %q is not a subject key", s.SKey)
-		}
-		tag, err := tx.Exec(ctx, `INSERT INTO search_suppression (skey, origin, reason, created_at)
-VALUES ($1, nullif($2, ''), nullif($3, ''), $4) ON CONFLICT (skey) DO NOTHING`, s.SKey, s.Origin, s.Reason, s.CreatedAt)
-		if err != nil {
-			return 0, err
-		}
-		added += int(tag.RowsAffected())
-		keys = append(keys, s.SKey)
-	}
-	if err := RefreshSubjects(ctx, tx, keys); err != nil {
-		return 0, err
-	}
-	return added, tx.Commit(ctx)
 }

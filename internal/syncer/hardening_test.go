@@ -7,127 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/accquix/register/internal/ingest"
+	"github.com/jackc/pgx/v5"
+
 	"github.com/accquix/register/internal/sources/fs"
 	"github.com/accquix/register/internal/sources/rpo"
 	"github.com/accquix/register/internal/syncer"
 	"github.com/accquix/register/internal/testkit"
 )
-
-// An objection is bound to the subject, not to the key it had on the day of the objection: it
-// holds when a record gains an IČO and when a record loses one.
-func TestObjectionFollowsKeyChange(t *testing.T) {
-	ctx := context.Background()
-	conn := testkit.Conn(t, testkit.Database(t))
-	b := testkit.NewBucket(t)
-	s := newSync(t, conn, b)
-
-	alfa := testkit.Company(1, "Alfa Stavby, s.r.o.")
-	trader := testkit.Trader(4, "99900004", "Ján Fiktívny - Kaderníctvo")
-	agent := testkit.Trader(5, "99900004", "Ján Fiktívny") // second record of the same person
-	agent.RegisterCode, agent.RegisterName = "9", "Register finančných agentov"
-	noico := testkit.Trader(6, "Neuvedené", "Bez IČO Remeslo")
-	b.PutSnapshot("2026-01-03", []testkit.Rec{alfa, trader, agent, noico}, 3)
-	if err := s.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"r900000006", "99900004"} {
-		if err := ingest.Suppress(ctx, conn, key, "ticket", true); err != nil {
-			t.Fatal(err)
-		}
-	}
-	eq(t, "after the objections", strs(t, conn, `SELECT DISTINCT skey FROM search_name`), []string{"99900001"})
-	// the IČO objection also covers each record that carries the IČO
-	eq(t, "propagated to records", strs(t, conn, `SELECT skey FROM search_suppression WHERE origin = '99900004'`),
-		[]string{"r900000004", "r900000005"})
-
-	// The record without an IČO gains one; one record of the trader loses its IČO.
-	noico2 := noico
-	noico2.ICO = "99900006"
-	agent2 := agent
-	agent2.ICO = "Neuvedené"
-	b.PutDaily("2026-01-04", []testkit.Rec{noico2, agent2})
-	if err := s.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	eq(t, "after the keys changed", strs(t, conn, `SELECT DISTINCT skey FROM search_name`), []string{"99900001"})
-	eq(t, "propagated to the new IČO", strs(t, conn, `SELECT origin FROM search_suppression WHERE skey = '99900006'`), []string{"r900000006"})
-	if n := num(t, conn, `SELECT count(*) FROM search_word WHERE word IN ('remeslo', 'jan', 'kadernictvo')`); n != 0 {
-		t.Fatalf("the dictionary keeps %d words that only suppressed subjects use", n)
-	}
-
-	// Undo by a propagated key removes the whole objection; the other one stays.
-	if err := ingest.Suppress(ctx, conn, "99900006", "", false); err != nil {
-		t.Fatal(err)
-	}
-	eq(t, "after one undo", strs(t, conn, `SELECT DISTINCT skey FROM search_name`), []string{"99900001", "99900006"})
-	if n := num(t, conn, `SELECT count(*) FROM search_suppression WHERE skey IN ('99900006', 'r900000006')`); n != 0 {
-		t.Fatalf("an undone objection left %d rows", n)
-	}
-	if err := ingest.Suppress(ctx, conn, "99900004", "", false); err != nil {
-		t.Fatal(err)
-	}
-	eq(t, "after both undos", strs(t, conn, `SELECT DISTINCT skey FROM search_name`),
-		[]string{"99900001", "99900004", "99900006", "r900000005"})
-	if n := num(t, conn, `SELECT count(*) FROM search_suppression`); n != 0 {
-		t.Fatalf("%d objections left", n)
-	}
-}
-
-// An objection recorded while a unit is being applied waits for that unit, so the unit cannot
-// commit search rows the objection did not see.
-func TestObjectionWaitsForTheUnitBeingApplied(t *testing.T) {
-	ctx := context.Background()
-	dsn := testkit.Database(t)
-	conn := testkit.Conn(t, dsn)
-	b := testkit.NewBucket(t)
-	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o.")}, 3)
-	if err := newSync(t, conn, b).Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, c := range []struct{ name, ico, change string }{
-		{"a subject already in search", "99900001",
-			`UPDATE rpo_record SET name = 'Alfa Nová, s.r.o.', name_core = 'alfa nova', changed_at = now() WHERE ico = '99900001'`},
-		{"a subject that first appears in the unit", "99900002",
-			`INSERT INTO rpo_record (id, ico, kind, name, name_core, source_as_of, src_date, src_rank, row_hash)
-VALUES (900000002, '99900002', 'sole_trader', 'Beta Vymyslená', 'beta vymyslena', '2026-01-04', '2026-01-04', 0, '\x01')`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			unit, err := conn.Begin(ctx) // the unit: change the record, rebuild its search rows, stay open
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer unit.Rollback(ctx)
-			if _, err := unit.Exec(ctx, c.change); err != nil {
-				t.Fatal(err)
-			}
-			if err := ingest.RefreshSubjects(ctx, unit, []string{c.ico}); err != nil {
-				t.Fatal(err)
-			}
-			done := make(chan error, 1)
-			operator := testkit.Conn(t, dsn)
-			go func() { done <- ingest.Suppress(ctx, operator, c.ico, "ticket", true) }()
-			select {
-			case err := <-done:
-				t.Fatalf("the objection did not wait for the open unit (err %v)", err)
-			case <-time.After(300 * time.Millisecond):
-			}
-			if err := unit.Commit(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if err := <-done; err != nil {
-				t.Fatal(err)
-			}
-			if n := num(t, conn, `SELECT (SELECT count(*) FROM search_name WHERE skey = $1) + (SELECT count(*) FROM search_token WHERE skey = $1)`, c.ico); n != 0 {
-				t.Fatalf("%d search rows of a suppressed subject survived", n)
-			}
-			if n := num(t, conn, `SELECT count(*) FROM search_word WHERE word IN ('alfa', 'nova', 'beta', 'vymyslena')`); n != 0 {
-				t.Fatalf("%d dictionary words of suppressed subjects survived", n)
-			}
-		})
-	}
-}
 
 // A first snapshot is published only when it is whole: the manifest and the bucket agree, and the
 // total is large enough to be a register.
@@ -268,45 +154,6 @@ func TestFSRejectsFutureDatesAndTruncatedLists(t *testing.T) {
 	}
 }
 
-// Undoing one objection never removes another that the operator recorded independently for the
-// same subject, whichever of the two came first.
-func TestUndoKeepsIndependentObjections(t *testing.T) {
-	ctx := context.Background()
-	conn := testkit.Conn(t, testkit.Database(t))
-	b := testkit.NewBucket(t)
-	trader := testkit.Trader(4, "99900004", "Ján Fiktívny - Kaderníctvo")
-	agent := testkit.Trader(5, "99900004", "Ján Fiktívny")
-	agent.RegisterCode, agent.RegisterName = "9", "Register finančných agentov"
-	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o."), trader, agent}, 3)
-	if err := newSync(t, conn, b).Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	all := []string{"99900004", "r900000004", "r900000005"}
-	for _, order := range [][2]string{{"99900004", "r900000005"}, {"r900000005", "99900004"}} {
-		for _, key := range order {
-			if err := ingest.Suppress(ctx, conn, key, "ticket "+key, true); err != nil {
-				t.Fatal(err)
-			}
-		}
-		// undo the first objection: the second still hides the whole subject
-		if err := ingest.Suppress(ctx, conn, order[0], "", false); err != nil {
-			t.Fatal(err)
-		}
-		eq(t, "one of two objections undone: still hidden", strs(t, conn, `SELECT DISTINCT skey FROM search_name`), []string{"99900001"})
-		eq(t, "the remaining objection covers every key", strs(t, conn, `SELECT skey FROM search_suppression`), all)
-		eq(t, "the remaining objection is the operator's own row",
-			strs(t, conn, `SELECT skey FROM search_suppression WHERE origin IS NULL`), []string{order[1]})
-		// undo the second: only now is the subject back
-		if err := ingest.Suppress(ctx, conn, order[1], "", false); err != nil {
-			t.Fatal(err)
-		}
-		eq(t, "both undone", strs(t, conn, `SELECT DISTINCT skey FROM search_name`), []string{"99900001", "99900004"})
-		if n := num(t, conn, `SELECT count(*) FROM search_suppression`); n != 0 {
-			t.Fatalf("%d objections left", n)
-		}
-	}
-}
-
 // The boundaries of the date rules: one day of skew and "tomorrow" pass, one day more does not.
 func TestExportDateBoundaries(t *testing.T) {
 	ctx := context.Background()
@@ -346,4 +193,157 @@ func TestExportDateBoundaries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A file name with an impossible date matches the pattern but is not a snapshot: it is ignored,
+// and it must never make a pass spin (review: 18 748 manifest requests in 4 s) or hide a valid
+// older snapshot from a bootstrap.
+func TestImpossibleDatesInFileNamesAreIgnored(t *testing.T) {
+	ctx := context.Background()
+	junk := func(b *testkit.Bucket) {
+		b.Put("batch-init/init_2026-02-31_001.json.gz", testkit.File("2026-02-31", []testkit.Rec{testkit.Company(9, "Nemožná, s.r.o.")}))
+		b.Put("batch-init/init_2026-02-31_list.txt", []byte("init_2026-02-31_001.json.gz\n"))
+		b.Put("batch-daily/actual_2026-13-01.json.gz", testkit.File("2026-13-01", nil))
+	}
+	run := func(s *syncer.RPO) error {
+		done := make(chan error, 1)
+		go func() { done <- s.Run(ctx) }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(20 * time.Second):
+			t.Fatal("the pass did not end")
+			return nil
+		}
+	}
+
+	// an empty database: the valid older snapshot is used
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o.")}, 3)
+	junk(b)
+	s := newSync(t, conn, b)
+	if err := run(s); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(t, conn); st.State != "daily" || st.BaseSnapshot != "2026-01-03" {
+		t.Fatalf("bootstrap with a malformed snapshot in the bucket: %+v", st)
+	}
+	// a published database: the pass ends at once and nothing changes
+	if err := run(s); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.Gets["batch-init/init_2026-02-31_list.txt"] + b.Gets["batch-init/init_2026-02-31_001.json.gz"]; n != 0 {
+		t.Fatalf("a malformed snapshot was requested %d times", n)
+	}
+	if n := num(t, conn, `SELECT count(*) FROM rpo_record`); n != 1 {
+		t.Fatalf("records: %d", n)
+	}
+}
+
+// Order is decided by the date in the file name. A snapshot part whose exportDate is a day later
+// than its name must not outrank the daily file of that later day (it used to: the daily change
+// was dropped while applied_through advanced).
+func TestSnapshotDoesNotOutrankTheNextDaily(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	s := newSync(t, conn, b)
+	alfa := testkit.Company(1, "Alfa Stavby, s.r.o.")
+	b.PutSnapshot("2026-01-03", []testkit.Rec{alfa}, 3)
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// the next snapshot (01-07) is stamped 01-08 inside; the daily file of 01-08 renames the subject
+	b.Put("batch-init/init_2026-01-07_001.json.gz", testkit.File("2026-01-08", []testkit.Rec{alfa}))
+	b.Put("batch-init/init_2026-01-07_list.txt", []byte("init_2026-01-07_001.json.gz\n"))
+	renamed := alfa
+	renamed.Name = "Alfa Domy, s.r.o."
+	b.PutDaily("2026-01-08", []testkit.Rec{renamed})
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(t, conn); st.BaseSnapshot != "2026-01-07" || st.AppliedThrough != "2026-01-08" {
+		t.Fatalf("state: %+v", st)
+	}
+	if got := strs(t, conn, `SELECT name || ' ' || src_date::text || ' ' || source_as_of::text FROM rpo_record WHERE id = $1`, alfa.ID); got[0] != "Alfa Domy, s.r.o. 2026-01-08 2026-01-08" {
+		t.Fatalf("the daily change after the snapshot was lost: %v", got)
+	}
+	eq(t, "search", strs(t, conn, `SELECT name_core FROM search_name`), []string{"alfa domy"})
+}
+
+// A snapshot is used only when it has settled, when it is not clearly smaller than the previous
+// one in the bucket, and a bootstrap that moves to another snapshot starts over.
+func TestBootstrapTrustsOnlyASettledWholeSnapshot(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	mk := func(conn *pgx.Conn, b *testkit.Bucket) *syncer.RPO {
+		bk := rpo.NewBucket(b.URL())
+		bk.Retries = 1
+		return syncer.NewRPO(conn, syncer.RPOConfig{Bucket: bk, WorkDir: t.TempDir(), PartRecords: 2, Now: func() time.Time { return now }})
+	}
+	var recs []testkit.Rec
+	for i := 1; i <= 6; i++ {
+		recs = append(recs, testkit.Company(i, "Firma "+string(rune('A'+i))))
+	}
+
+	t.Run("still being published", func(t *testing.T) {
+		conn := testkit.Conn(t, testkit.Database(t))
+		b := testkit.NewBucket(t)
+		b.PutSnapshot("2026-01-10", recs, 2)
+		b.Modified["batch-init/init_2026-01-10_003.json.gz"] = now.Add(-time.Hour) // the last part arrived an hour ago
+		if err := mk(conn, b).Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if st := state(t, conn); st.State != "empty" {
+			t.Fatalf("an unsettled snapshot was used: %+v", st)
+		}
+		b.Modified["batch-init/init_2026-01-10_003.json.gz"] = now.Add(-3 * time.Hour)
+		if err := mk(conn, b).Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if st := state(t, conn); st.State != "daily" {
+			t.Fatalf("a settled snapshot was not used: %+v", st)
+		}
+	})
+
+	t.Run("clearly smaller than the previous snapshot", func(t *testing.T) {
+		conn := testkit.Conn(t, testkit.Database(t))
+		b := testkit.NewBucket(t)
+		b.PutSnapshot("2026-01-03", recs, 2)     // 3 parts
+		b.PutSnapshot("2026-01-10", recs[:2], 2) // 1 part: two parts fewer
+		if err := mk(conn, b).Run(ctx); !errors.Is(err, syncer.ErrBlocked) || !strings.Contains(err.Error(), "previous snapshot") {
+			t.Fatalf("want a block, got %v", err)
+		}
+		if st := state(t, conn); st.PublishedAsOf != "" {
+			t.Fatalf("published: %+v", st)
+		}
+	})
+
+	t.Run("moving to a newer snapshot starts over", func(t *testing.T) {
+		conn := testkit.Conn(t, testkit.Database(t))
+		b := testkit.NewBucket(t)
+		// snapshot A: its first part applies, its second (last) part is oversized and is rejected
+		b.Put("batch-init/init_2026-01-03_001.json.gz", testkit.File("2026-01-03", recs[:2]))
+		b.Put("batch-init/init_2026-01-03_002.json.gz", testkit.File("2026-01-03", recs[2:5]))
+		b.Put("batch-init/init_2026-01-03_list.txt", []byte("init_2026-01-03_001.json.gz\ninit_2026-01-03_002.json.gz\n"))
+		if err := mk(conn, b).Run(ctx); !errors.Is(err, syncer.ErrBlocked) {
+			t.Fatalf("want a block on the oversized part, got %v", err)
+		}
+		if n := num(t, conn, `SELECT count(*) FROM rpo_record`); n != 2 {
+			t.Fatalf("records of the abandoned snapshot: %d", n)
+		}
+		// snapshot B arrives with other records
+		b.PutSnapshot("2026-01-10", recs[4:], 2)
+		if err := syncer.Unblock(ctx, conn, "rpo"); err != nil {
+			t.Fatal(err)
+		}
+		if err := mk(conn, b).Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if st := state(t, conn); st.State != "daily" || st.BaseSnapshot != "2026-01-10" {
+			t.Fatalf("state: %+v", st)
+		}
+		eq(t, "only the published snapshot's records", strs(t, conn, `SELECT id::text FROM rpo_record`), []string{"900000005", "900000006"})
+	})
 }

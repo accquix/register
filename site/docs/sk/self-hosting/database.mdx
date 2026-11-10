@@ -5,32 +5,37 @@ description: Roly, spojenia, spravované PostgreSQL a jediná tabuľka, ktorú m
 
 ## Roly
 
-Oddelené roly udržia API len na čítanie:
+Oddelené roly držia každý proces pri jeho úlohe. Vytvorte ich ako správca pred `migrate`:
 
 ```sql
-CREATE ROLE register_migrate LOGIN PASSWORD '…';   -- vlastní schému, spúšťa migrate
-CREATE ROLE register_sync    LOGIN PASSWORD '…';   -- sync a suppress
-CREATE ROLE register_api     LOGIN PASSWORD '…';   -- serve
+CREATE ROLE register_migrate  LOGIN PASSWORD '…';   -- vlastní schému, spúšťa migrate
+CREATE ROLE register_sync     LOGIN PASSWORD '…';   -- sync
+CREATE ROLE register_operator LOGIN PASSWORD '…';   -- suppress (námietky)
+CREATE ROLE register_api      LOGIN PASSWORD '…';   -- serve
 
 ALTER DATABASE register OWNER TO register_migrate;
-GRANT TEMPORARY ON DATABASE register TO register_sync;
-
--- práva na všetko, čo migrate vytvorí, teraz aj v ďalších verziách:
-ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO register_sync;
-ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
-  GRANT USAGE ON SEQUENCES TO register_sync;
-ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
-  GRANT SELECT ON TABLES TO register_api;
-
--- API nikdy nezapisuje a nekonečný dopyt ukončí aj server:
+GRANT CONNECT ON DATABASE register TO register_sync, register_operator, register_api;
+GRANT TEMPORARY ON DATABASE register TO register_sync, register_operator;
 ALTER ROLE register_api SET default_transaction_read_only = on;
 ALTER ROLE register_api SET statement_timeout = '10s';
 ```
 
-Spustite to ako správca pred `migrate`. Nasadenie cez docker compose to urobí za vás pri prvom štarte PostgreSQL,
-takže žiadny proces registra sa nepripája ako superpoužívateľ. Na PostgreSQL 17 a 18 pridajte role pre
-synchronizáciu aj právo `MAINTAIN` na tabuľky.
+Potom spustite `migrate` s názvami rolí. Každej role pridelí presne tie práva na tabuľky, ktoré potrebuje, a to po
+každej migrácii:
+
+```sh
+REGISTER_DB_ROLE_API=register_api REGISTER_DB_ROLE_SYNC=register_sync \
+REGISTER_DB_ROLE_OPERATOR=register_operator accquix-register migrate
+```
+
+| Rola | Môže | Nemôže |
+| --- | --- | --- |
+| API | čítať zrkadlo, vyhľadávaciu vrstvu a to, ktoré kľúče sú vyradené | čítať dôvody ani históriu námietok; čokoľvek zapisovať |
+| sync | zapisovať zrkadlo a vyhľadávaciu vrstvu; čítať námietky | pridať, zmeniť ani odvolať námietku |
+| operátor | pridávať a odvolávať námietky; potvrdiť inštaláciu | zapisovať dáta registra |
+
+Nasadenie cez docker compose to celé urobí za vás, takže žiadny proces registra sa nepripája ako superpoužívateľ.
+Testované sú PostgreSQL 16, 17 a 18.
 
 Potom nasmerujte každý režim na jeho rolu:
 
@@ -38,10 +43,10 @@ Potom nasmerujte každý režim na jeho rolu:
 | --- | --- | --- |
 | `REGISTER_MIGRATE_DATABASE_URL` | `register_migrate` | Priame |
 | `REGISTER_SYNC_DATABASE_URL` | `register_sync` | **Priame** (advisory lock, COPY, dočasné tabuľky) |
+| `REGISTER_OPERATOR_DATABASE_URL` | `register_operator` | **Priame** |
 | `REGISTER_DATABASE_URL` | `register_api` | Priame alebo transakčný pooler |
 
-Synchronizácia vytvára dočasné tabuľky, preto jej rola potrebuje právo `TEMPORARY` na databázu. Režimu `serve` nikdy
-nedávajte rolu, ktorá môže zapisovať. Pri spravovaných databázach použite `sslmode=verify-full`.
+Režimu `serve` nikdy nedávajte rolu, ktorá môže zapisovať. Pri spravovaných databázach použite `sslmode=verify-full`.
 
 ## Spravovaní poskytovatelia
 
@@ -61,15 +66,21 @@ vyhľadávanie pridá asi 10 MB.
 Dáta registra zálohu nepotrebujú: vždy ich možno znova zostaviť z oficiálnych zdrojov. Verzie častí sú odtlačky
 obsahu, takže po opätovnom zostavení vaši klienti uvidia rovnaké verzie a žiadne falošné zmeny.
 
-Zoznam námietok (`search_suppression`) je iný: sú to vaše vlastné dáta a žiadny zdroj ich neobnoví. Ak sa stratí,
-každá osoba, ktorá podala námietku, sa potichu vráti do vyhľadávania podľa názvu. Zmazanie databázy,
-`docker compose down -v` aj `migrate down-to 0` ho zmažú.
+Námietky sú iné: sú to vaše vlastné dáta a žiadny zdroj ich neobnoví. Ak sa stratia, každá osoba, ktorá podala
+námietku, sa potichu vráti do vyhľadávania podľa názvu. Zmazanie databázy, `docker compose down -v` aj
+`migrate down-to 0` ich zmažú.
 
 ```sh
-accquix-register suppress --list > objections.tsv        # po každej zmene a pravidelne
-accquix-register suppress --restore objections.tsv       # na znova zostavenej databáze, pred prvým sync
+accquix-register suppress --export --output objections.tsv --overwrite   # po každej zmene a pravidelne
+accquix-register suppress --restore objections.tsv                       # na znova zostavenej databáze
 ```
 
-Súbor uchovávajte šifrovaný a mimo databázy: obsahuje zoznam osôb, ktoré podali námietku. Posledný riadok obsahuje
-počet riadkov a kontrolný súčet a obnova odmietne poškodený súbor. Pri opätovnom zostavení spustite `migrate`, potom
-obnovu a až potom `sync` a `serve`.
+- Export sa zapisuje atomicky, na prepísanie súboru potrebuje `--overwrite` a nikdy ho neprepíše prázdnym exportom.
+  Výstup `suppress --list` nepresmerúvajte do súboru: shell súbor vyprázdni skôr, než sa príkaz spustí.
+- Súbor uchovávajte šifrovaný a mimo databázy: obsahuje zoznam osôb, ktoré podali námietku. Posledný riadok obsahuje
+  počet riadkov a kontrolný súčet, takže obnova odmietne poškodený súbor. Je to kontrola celistvosti, nie pravosti:
+  kto môže súbor zmeniť, môže súčet prepočítať.
+- Po opätovnom zostavení API odpovedá `503` s `reason: setup`, kým nespustíte `suppress --restore`, alebo
+  `suppress --init-empty` na novej inštalácii bez námietok. Prázdna databáza tieto dva prípady nerozlíši, preto
+  register nič neháda.
+- Ak ste stratili databázu aj všetky kópie zálohy, register námietky obnoviť nedokáže.

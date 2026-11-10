@@ -303,7 +303,7 @@ components:
             - array
             - "null"
         reason:
-          description: "For unavailable: bootstrapping, source_stale, timeout, database"
+          description: "For unavailable: bootstrapping, setup, source_stale, timeout, database"
           type: string
         status:
           description: HTTP status code
@@ -480,6 +480,9 @@ components:
           additionalProperties:
             type: string
           type: object
+        setupPending:
+          description: true until the operator confirms the objections of this installation; the data endpoints answer 503 reason=setup
+          type: boolean
         sources:
           items:
             $ref: "#/components/schemas/SourceInfo"
@@ -489,6 +492,7 @@ components:
       required:
         - sources
         - bootstrapping
+        - setupPending
         - licences
         - attribution
       type: object

@@ -169,6 +169,7 @@ type BatchOutput struct{ Body BatchBody }
 type SourcesBody struct {
 	Sources       []lookup.SourceInfo `json:"sources"`
 	Bootstrapping bool                `json:"bootstrapping" doc:"true until every source is first published"`
+	SetupPending  bool                `json:"setupPending" doc:"true until the operator confirms the objections of this installation; the data endpoints answer 503 reason=setup"`
 	Licences      map[string]string   `json:"licences"`
 	Attribution   []string            `json:"attribution"`
 }
@@ -227,8 +228,15 @@ func (s *Server) sourcesReady(ctx context.Context) (map[string]lookup.SourceInfo
 	if missing := lookup.Bootstrapping(srcs); len(missing) > 0 {
 		return nil, unavailable("bootstrapping", "the mirror is still being built")
 	}
+	if ok, err := s.store.ObjectionsConfirmed(ctx); err != nil {
+		return nil, unavailable("database", "the database is unavailable")
+	} else if !ok {
+		return nil, unavailable("setup", setupDetail)
+	}
 	return srcs, nil
 }
+
+const setupDetail = "the operator has not confirmed the objections of this installation (suppress --restore or suppress --init-empty)"
 
 func dbError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -488,7 +496,11 @@ func (s *Server) sources(ctx context.Context, _ *struct{}) (*SourcesOutput, erro
 	if err != nil {
 		return nil, unavailable("database", "the database is unavailable")
 	}
-	body := SourcesBody{Bootstrapping: len(lookup.Bootstrapping(srcs)) > 0, Attribution: lookup.Attribution,
+	confirmed, err := s.store.ObjectionsConfirmed(ctx)
+	if err != nil {
+		return nil, unavailable("database", "the database is unavailable")
+	}
+	body := SourcesBody{Bootstrapping: len(lookup.Bootstrapping(srcs)) > 0, SetupPending: !confirmed, Attribution: lookup.Attribution,
 		Licences: map[string]string{"rpo": "CC BY 4.0 (Ministerstvo vnútra SR)", "fs": "Zdroj údajov: Finančná správa SR"}}
 	for _, name := range lookup.AllSources {
 		body.Sources = append(body.Sources, srcs[name])
@@ -521,6 +533,13 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	}
 	if missing := lookup.Bootstrapping(srcs); len(missing) > 0 {
 		writeProblem(w, unavailable("bootstrapping", fmt.Sprintf("not yet published: %v", missing)), 0)
+		return
+	}
+	if ok, err := s.store.ObjectionsConfirmed(ctx); err != nil {
+		writeProblem(w, unavailable("database", "the database is unavailable"), 0)
+		return
+	} else if !ok {
+		writeProblem(w, unavailable("setup", setupDetail), 0)
 		return
 	}
 	_, _ = w.Write([]byte("ready\n"))

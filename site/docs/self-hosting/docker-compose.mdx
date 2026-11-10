@@ -12,13 +12,16 @@ description: The reference deployment, its services, secrets and settings.
 | `sync` | `accquix-register sync --every 1h` | Long-running; one pass an hour |
 | `serve` | `accquix-register serve` | Long-running; the API on port 8080 |
 
-`sync` and `serve` start only after `migrate` succeeded.
+`sync` and `serve` start only after `migrate` succeeded. The API becomes ready when the first sync has published
+every source **and** you confirmed the objections of the installation: `suppress --init-empty` on a new one,
+`suppress --restore` on a rebuilt one (see [Database](/self-hosting/database#back-up-the-objections)).
 
 ## Secrets
 
 There are no default credentials. `make-secrets.sh` creates the files in `secrets/`. Each process has its own
-database role and gets only its own secret: `migrate` owns the schema, `sync` reads and writes the tables, `serve`
-can only read. The roles are created when PostgreSQL first starts; no register process connects as the superuser.
+database role and gets only its own secret: `migrate` owns the schema, `sync` writes the mirror, `operator` changes
+the objections, `serve` can only read the published data. The roles are created when PostgreSQL first starts; no
+register process connects as the superuser.
 
 <FileTree>
 - deploy/compose/
@@ -26,9 +29,10 @@ can only read. The roles are created when PostgreSQL first starts; no register p
   - make-secrets.sh
   - secrets/
     - postgres_password (the superuser: for you, never for the register)
-    - migrate_password, sync_password, api_password
+    - migrate_password, sync_password, operator_password, api_password
     - migrate_database_url
     - sync_database_url
+    - operator_database_url
     - database_url (the API role)
     - api_keys
 </FileTree>
@@ -56,6 +60,24 @@ docker compose logs -f sync                       # watch the sync
 docker compose exec serve accquix-register version
 docker compose run --rm sync sync --source fs     # one extra pass of the FS lists
 docker compose down                               # stop; data stays in the pgdata volume
-docker compose run --rm -T sync suppress --list > objections.tsv   # back up the objections
-docker compose down -v                            # stop and delete the data: back up the objections first
+docker compose run --rm operator suppress --init-empty             # once, on a new installation
+docker compose run --rm operator suppress --subject 99900004 --reason "ticket 123"
+docker compose run --rm operator suppress --list
+docker compose run --rm -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv
+docker compose down -v                            # stop and delete the data: export the objections first
+```
+
+`operator` is not started by `docker compose up`; it runs one `suppress` command and exits. The backup directory
+must be writable by uid 65532.
+
+## Upgrading from the single-role layout
+
+A deployment made before the roles were separated used one superuser for every process. To move it, keeping the
+data, the objections and the API keys:
+
+```sh
+docker compose down            # keeps the pgdata volume
+./make-secrets.sh --upgrade    # adds the new secret files; sets the old superuser URL aside
+./upgrade-roles.sh             # creates the roles and hands the database to register_migrate
+docker compose up -d
 ```

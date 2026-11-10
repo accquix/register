@@ -44,6 +44,9 @@ func (s *safeBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 func populate(t *testing.T, dsn string) {
 	ctx := context.Background()
 	conn := testkit.Conn(t, dsn)
+	if err := ingest.ConfirmNoObjections(ctx, conn); err != nil { // a new installation
+		t.Fatal(err)
+	}
 	day := func(d int) string { return time.Now().UTC().AddDate(0, 0, d).Format("2006-01-02") }
 	sk := func(d int) string { return time.Now().UTC().AddDate(0, 0, d).Format("02.01.2006") }
 
@@ -334,8 +337,9 @@ func TestAPI(t *testing.T) {
 
 	t.Run("objection keeps a subject out of name search only", func(t *testing.T) {
 		conn := testkit.Conn(t, dsn)
-		if err := ingest.Suppress(context.Background(), conn, "99900002", "ticket-1", true); err != nil {
-			t.Fatal(err)
+		id, records, err := ingest.AddObjection(context.Background(), conn, "99900002", "ticket-1")
+		if err != nil || records != 1 {
+			t.Fatalf("add: %d records, %v", records, err)
 		}
 		_, _, m := e.get(t, "/v1/search?q=rybka", true)
 		if strings.Contains(strings.Join(names(m), "|"), "Strieborná") {
@@ -344,8 +348,8 @@ func TestAPI(t *testing.T) {
 		if code, _, _ := e.get(t, "/v1/lookup/99900002", true); code != 200 {
 			t.Fatalf("exact lookup of a suppressed subject: %d", code)
 		}
-		if err := ingest.Suppress(context.Background(), conn, "99900002", "", false); err != nil {
-			t.Fatal(err)
+		if still, err := ingest.RevokeObjection(context.Background(), conn, id); err != nil || len(still) != 0 {
+			t.Fatalf("revoke: %v %v", still, err)
 		}
 		_, _, m = e.get(t, "/v1/search?q=rybka", true)
 		if !strings.Contains(strings.Join(names(m), "|"), "Strieborná") {
@@ -357,10 +361,10 @@ func TestAPI(t *testing.T) {
 		// The row is written without rebuilding the search layer, as after an interrupted refresh:
 		// the subject's search rows and dictionary words are still there.
 		conn := testkit.Conn(t, dsn)
-		if _, err := conn.Exec(context.Background(), `INSERT INTO search_suppression (skey) VALUES ('99900001')`); err != nil {
+		if _, err := conn.Exec(context.Background(), `INSERT INTO objection (ico) VALUES ('99900001')`); err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Exec(context.Background(), `DELETE FROM search_suppression WHERE skey = '99900001'`)
+		defer conn.Exec(context.Background(), `UPDATE objection SET revoked_at = now() WHERE ico = '99900001' AND revoked_at IS NULL`)
 		for _, qq := range []string{"zlata", "zlata ryb", "rybka"} {
 			if _, _, m := e.get(t, "/v1/search?q="+q(qq), true); strings.Contains(strings.Join(names(m), "|"), "Zlatá") {
 				t.Fatalf("%q returned a suppressed subject", qq)
@@ -370,6 +374,26 @@ func TestAPI(t *testing.T) {
 		code, _, m := fz.get(t, "/v1/search?mode=fuzzy&q="+q("zlta rybka"), true)
 		if b, _ := json.Marshal(m); code != 200 || strings.Contains(strings.ToLower(string(b)), "zlat") {
 			t.Fatalf("fuzzy search revealed a word that only a suppressed subject uses: %d %s", code, b)
+		}
+	})
+
+	t.Run("nothing is served until the operator confirms the objections", func(t *testing.T) {
+		conn := testkit.Conn(t, dsn)
+		ctx := context.Background()
+		if _, err := conn.Exec(ctx, `UPDATE register_setup SET objections_confirmed_at = NULL, objections_confirmed_as = NULL WHERE only_row`); err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Exec(ctx, `UPDATE register_setup SET objections_confirmed_at = now(), objections_confirmed_as = 'new' WHERE only_row`)
+		for _, p := range []string{"/v1/search?q=rybka", "/v1/lookup/99900001"} {
+			if code, _, m := e.get(t, p, true); code != 503 || m["reason"] != "setup" {
+				t.Fatalf("%s on an unconfirmed installation: %d %v", p, code, m)
+			}
+		}
+		if code, _, _ := e.get(t, "/readyz", false); code != 503 {
+			t.Fatalf("readyz on an unconfirmed installation: %d", code)
+		}
+		if _, _, m := e.get(t, "/v1/sources", true); m["setupPending"] != true {
+			t.Fatalf("sources must report the pending setup: %v", m["setupPending"])
 		}
 	})
 

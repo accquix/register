@@ -25,11 +25,15 @@ type RPOUnit struct {
 	SHA256        string
 	Rank          int16 // 0 daily file, 1 snapshot part (the order guard compares (date, rank))
 	Open          func() (io.ReadCloser, error)
-	RefreshSearch bool                                                     // update the search layer for touched subjects
-	MarkSeen      bool                                                     // record ids in rpo_seen (reconcile)
-	CheckDate     func(exportDate time.Time) error                         // nil = accept; an error rejects the unit before anything is staged
-	Validate      func(records int) error                                  // nil = accept; an error rejects the unit
-	After         func(ctx context.Context, tx pgx.Tx, r UnitResult) error // runs in the same transaction
+	RefreshSearch bool // update the search layer for touched subjects
+	MarkSeen      bool // record ids in rpo_seen (reconcile)
+	// OrderDate is the date the order guard uses (src_date): the date in the file name, which is
+	// also the order the files are applied in. Zero means the file's exportDate. The exportDate is
+	// stored as source_as_of either way.
+	OrderDate time.Time
+	CheckDate func(exportDate time.Time) error                         // nil = accept; an error rejects the unit before anything is staged
+	Validate  func(records int) error                                  // nil = accept; an error rejects the unit
+	After     func(ctx context.Context, tx pgx.Tx, r UnitResult) error // runs in the same transaction
 }
 
 // UnitResult describes an applied unit.
@@ -67,9 +71,10 @@ func nullDate(s string) any {
 
 // copySource adapts the streaming decoder to pgx.CopyFromSource.
 type copySource struct {
-	dec  *rpo.Decoder
-	rank int16
-	vals []any
+	dec   *rpo.Decoder
+	rank  int16
+	order time.Time // src_date; zero = the export date
+	vals  []any
 }
 
 func (c *copySource) Next() bool {
@@ -78,11 +83,15 @@ func (c *copySource) Next() bool {
 	}
 	r := c.dec.Row()
 	d := c.dec.ExportDate()
+	order := c.order
+	if order.IsZero() {
+		order = d
+	}
 	c.vals = []any{
 		r.ID, nullStr(r.ICO), r.Kind, nullStr(r.Name), r.NameCore, nullStr(r.LegalSuffix), nullStr(r.LegalFormCode), nullStr(r.LegalForm),
 		nullDate(r.EstablishedOn), nullDate(r.TerminatedOn), nullStr(r.Street), nullStr(r.BuildingNumber), nullStr(r.PostalCode),
 		nullStr(r.Municipality), nullStr(r.Country), nullStr(r.RegisterCode), nullStr(r.RegisterName), nullStr(r.RegistrationOffice),
-		nullStr(r.RegistrationNumber), nullDate(r.RegistrationValidFrom), d, d, c.rank, r.Hash,
+		nullStr(r.RegistrationNumber), nullDate(r.RegistrationValidFrom), d, order, c.rank, r.Hash,
 	}
 	return true
 }
@@ -131,7 +140,7 @@ func ApplyRPO(ctx context.Context, conn *pgx.Conn, u RPOUnit) (UnitResult, error
 	if _, err := tx.Exec(ctx, `TRUNCATE rpo_record_stage`); err != nil {
 		return res, err
 	}
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"rpo_record_stage"}, rpoCols, &copySource{dec: dec, rank: u.Rank}); err != nil {
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"rpo_record_stage"}, rpoCols, &copySource{dec: dec, rank: u.Rank, order: u.OrderDate}); err != nil {
 		if derr := dec.Err(); derr != nil {
 			return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, derr)
 		}

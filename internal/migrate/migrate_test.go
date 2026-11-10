@@ -50,7 +50,7 @@ func testDatabase(t *testing.T) string {
 
 var expectedTables = []string{
 	"rpo_record", "fs_tax_subject", "fs_vat_payer", "fs_list_entry", "rpo_record_stage", "fs_stage",
-	"search_name", "search_token", "search_word", "search_suppression", "sync_source", "sync_unit", "sync_run", "rpo_snapshot_seen", "rpo_seen",
+	"search_name", "search_token", "search_word", "objection", "objection_record", "register_setup", "sync_source", "sync_unit", "sync_run", "rpo_snapshot_seen", "rpo_seen",
 }
 
 func tableCount(t *testing.T, dsn string) int {
@@ -137,5 +137,60 @@ func TestSchemaConstraints(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("want exactly 1 trigram index, got %d", n)
+	}
+}
+
+// Migration 00003 carries existing objections into the new model at once: the operator's rows
+// become objections, record keys propagated by 00002 become anchors, keys propagated onto another
+// IČO are dropped, and a database that already published stays confirmed.
+func TestObjectionsAreCarriedOver(t *testing.T) {
+	dsn := testDatabase(t)
+	ctx := context.Background()
+	p, db, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	c, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(ctx)
+	if _, err := c.Exec(ctx, `
+INSERT INTO rpo_record (id, ico, kind, source_as_of, src_date, src_rank, row_hash) VALUES
+  (900000004, '99900004', 'sole_trader', '2026-11-07', '2026-11-07', 1, '\x00'),
+  (900000005, NULL,       'sole_trader', '2026-11-07', '2026-11-07', 1, '\x00'),
+  (900000001, '99900001', 'legal_person', '2026-11-07', '2026-11-07', 1, '\x00');
+INSERT INTO search_suppression (skey, reason, origin) VALUES
+  ('99900004', 'ticket 1', NULL),          -- the operator's objection
+  ('r900000005', 'ticket 1', '99900004'),  -- a record that once carried the IČO
+  ('99900001', 'ticket 1', '99900004'),    -- spread onto another subject by a wrong IČO (the defect)
+  ('r900000009', 'ticket 2', NULL);        -- an objection for one record
+INSERT INTO sync_source (source, state, published_as_of) VALUES ('rpo', 'daily', '2026-11-07')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := c.Query(ctx, `SELECT coalesce(o.ico, 'r' || o.rpo_id) || ' ' || o.reason || ' ' ||
+  coalesce((SELECT string_agg(a.rpo_id::text, ',' ORDER BY a.rpo_id) FROM objection_record a WHERE a.objection_id = o.id), '-')
+FROM objection o ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"99900004 ticket 1 900000004,900000005", "r900000009 ticket 2 -"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("objections after the migration:\n got  %v\n want %v", got, want)
+	}
+	var as string
+	if err := c.QueryRow(ctx, `SELECT objections_confirmed_as FROM register_setup`).Scan(&as); err != nil || as != "existing" {
+		t.Fatalf("a published database must stay confirmed: %q %v", as, err)
 	}
 }

@@ -5,32 +5,37 @@ description: Roles, connections, managed PostgreSQL providers, and the one table
 
 ## Roles
 
-Separate roles keep the API read-only:
+Separate roles keep each process to its job. Create them as an administrator before `migrate`:
 
 ```sql
-CREATE ROLE register_migrate LOGIN PASSWORD '…';   -- owns the schema, runs migrate
-CREATE ROLE register_sync    LOGIN PASSWORD '…';   -- sync and suppress
-CREATE ROLE register_api     LOGIN PASSWORD '…';   -- serve
+CREATE ROLE register_migrate  LOGIN PASSWORD '…';   -- owns the schema, runs migrate
+CREATE ROLE register_sync     LOGIN PASSWORD '…';   -- sync
+CREATE ROLE register_operator LOGIN PASSWORD '…';   -- suppress (objections)
+CREATE ROLE register_api      LOGIN PASSWORD '…';   -- serve
 
 ALTER DATABASE register OWNER TO register_migrate;
-GRANT TEMPORARY ON DATABASE register TO register_sync;
-
--- rights on everything migrate creates, now and in later versions:
-ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO register_sync;
-ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
-  GRANT USAGE ON SEQUENCES TO register_sync;
-ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
-  GRANT SELECT ON TABLES TO register_api;
-
--- the API never writes, and the server cuts a runaway query too:
+GRANT CONNECT ON DATABASE register TO register_sync, register_operator, register_api;
+GRANT TEMPORARY ON DATABASE register TO register_sync, register_operator;
 ALTER ROLE register_api SET default_transaction_read_only = on;
 ALTER ROLE register_api SET statement_timeout = '10s';
 ```
 
-Run it as an administrator before `migrate`. The docker compose deployment does this for you when PostgreSQL first
-starts, so no register process connects as the superuser. On PostgreSQL 17 and 18, also grant `MAINTAIN` on the
-tables to the sync role.
+Then run `migrate` with the role names. It grants each role exactly the table rights it needs, after every
+migration:
+
+```sh
+REGISTER_DB_ROLE_API=register_api REGISTER_DB_ROLE_SYNC=register_sync \
+REGISTER_DB_ROLE_OPERATOR=register_operator accquix-register migrate
+```
+
+| Role | May | May not |
+| --- | --- | --- |
+| API | read the mirror, the search layer and which keys are suppressed | read the reasons or history of objections; write anything |
+| sync | write the mirror and the search layer; read the objections | add, change or revoke an objection |
+| operator | add and revoke objections; confirm the installation | write register data |
+
+The docker compose deployment does all of this for you, so no register process connects as the superuser.
+PostgreSQL 16, 17 and 18 are tested.
 
 Then point each mode at its role:
 
@@ -38,10 +43,10 @@ Then point each mode at its role:
 | --- | --- | --- |
 | `REGISTER_MIGRATE_DATABASE_URL` | `register_migrate` | Direct |
 | `REGISTER_SYNC_DATABASE_URL` | `register_sync` | **Direct** (advisory lock, COPY, temporary tables) |
+| `REGISTER_OPERATOR_DATABASE_URL` | `register_operator` | **Direct** |
 | `REGISTER_DATABASE_URL` | `register_api` | Direct or a transaction pooler |
 
-The sync creates temporary tables, so its role needs `TEMPORARY` on the database. Never give `serve` a role that can
-write. Use `sslmode=verify-full` for managed databases.
+Never give `serve` a role that can write. Use `sslmode=verify-full` for managed databases.
 
 ## Managed providers
 
@@ -61,15 +66,21 @@ fuzzy search adds about 10 MB.
 The register data needs no backup: it can always be rebuilt from the official sources. Section versions are content
 hashes, so after a rebuild your consumers see the same versions and no false changes.
 
-The list of objections (`search_suppression`) is different: it is your own data, and no source can restore it. If it
-is lost, every person who objected silently returns to name search. Dropping the database, `docker compose down -v`
-and `migrate down-to 0` all delete it.
+The objections are different: they are your own data, and no source can restore them. If they are lost, every person
+who objected silently returns to name search. Dropping the database, `docker compose down -v` and
+`migrate down-to 0` all delete them.
 
 ```sh
-accquix-register suppress --list > objections.tsv        # after every change, and on a schedule
-accquix-register suppress --restore objections.tsv       # on a rebuilt database, before the first sync
+accquix-register suppress --export --output objections.tsv --overwrite   # after every change, and on a schedule
+accquix-register suppress --restore objections.tsv                       # on a rebuilt database
 ```
 
-Keep the file encrypted and away from the database: it lists the people who objected. Its last line holds a row
-count and a checksum, and a restore refuses a damaged file. When you rebuild, run `migrate`, then the restore, and
-only then `sync` and `serve`.
+- The export is written atomically, needs `--overwrite` to replace a file, and never replaces one with an empty
+  export. Do not redirect `suppress --list` into a file: the shell empties the file before the command runs.
+- Keep the file encrypted and away from the database: it lists the people who objected. Its last line holds a row
+  count and a checksum, so a restore refuses a damaged file. That is integrity, not authenticity: whoever can change
+  the file can recompute the checksum.
+- After a rebuild the API answers `503` with `reason: setup` until you run `suppress --restore`, or
+  `suppress --init-empty` on a new installation with no objections. An empty database cannot tell the two apart, so
+  the register does not guess.
+- If you lost both the database and every copy of the backup, the register cannot recover the objections.

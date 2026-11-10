@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,32 +85,78 @@ func TestOpenAPIUpToDate(t *testing.T) {
 
 func TestObjectionBackupRoundTrip(t *testing.T) {
 	at := time.Date(2026, 11, 10, 9, 30, 0, 123456000, time.UTC)
-	rows := []ingest.Suppression{
-		{SKey: "99900004", Reason: "ticket 12\twith a tab", CreatedAt: at},
-		{SKey: "r900000004", Origin: "99900004", CreatedAt: at},
+	revoked := at.Add(time.Hour)
+	rows := []ingest.Objection{
+		{ID: 1, Key: "99900004", Reason: "ticket 12\twith a tab", CreatedAt: at, Anchors: []int64{900000004, 900000005}},
+		{ID: 2, Key: "r900000006", CreatedAt: at, RevokedAt: &revoked},
 	}
 	var buf bytes.Buffer
-	if err := writeSuppressions(&buf, rows); err != nil {
+	if err := writeObjections(&buf, rows); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readSuppressions(bytes.NewReader(buf.Bytes()))
+	got, err := readObjections(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].SKey != "99900004" || got[0].Reason != "ticket 12 with a tab" || !got[0].CreatedAt.Equal(at) || got[1].Origin != "99900004" {
+	if len(got) != 2 || got[0].Key != "99900004" || got[0].Reason != "ticket 12 with a tab" || !got[0].CreatedAt.Equal(at) ||
+		len(got[0].Anchors) != 2 || got[0].Anchors[1] != 900000005 || got[0].RevokedAt != nil ||
+		got[1].Key != "r900000006" || got[1].RevokedAt == nil || !got[1].RevokedAt.Equal(revoked) {
 		t.Fatalf("round trip: %+v", got)
 	}
 	file := buf.String()
-	cut := file[:strings.LastIndex(strings.TrimRight(file, "\n"), "\n")+1] // without the trailer
 	lines := strings.SplitAfter(file, "\n")
 	for name, damaged := range map[string]string{
-		"no trailer":  cut,
+		"no trailer":  lines[0] + lines[1],
 		"missing row": lines[0] + lines[2],
-		"changed key": strings.Replace(file, "99900004\t\t", "99900005\t\t", 1),
-		"bad key":     "not-a-key\t\t" + at.Format(time.RFC3339Nano) + "\t\n" + lines[2],
+		"changed key": strings.Replace(file, "99900004\t", "99900005\t", 1),
+		"bad key":     "not-a-key\t" + at.Format(time.RFC3339Nano) + "\t-\t\t\n" + lines[2],
+		"extra data":  file + "99900004\tx\n",
 	} {
-		if _, err := readSuppressions(strings.NewReader(damaged)); err == nil {
+		if _, err := readObjections(strings.NewReader(damaged)); err == nil {
 			t.Errorf("%s: a damaged backup was accepted", name)
 		}
+	}
+	// a long reason does not make the file unrestorable
+	long := []ingest.Objection{{Key: "99900004", Reason: strings.Repeat("x", 2<<20), CreatedAt: at}}
+	buf.Reset()
+	if err := writeObjections(&buf, long); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readObjections(&buf); err != nil || len(got[0].Reason) != 2<<20 {
+		t.Fatalf("long reason: %v", err)
+	}
+}
+
+func TestExportNeverDestroysABackup(t *testing.T) {
+	at := time.Date(2026, 11, 10, 9, 30, 0, 0, time.UTC)
+	rows := []ingest.Objection{{Key: "99900004", CreatedAt: at}}
+	path := filepath.Join(t.TempDir(), "objections.tsv")
+	if err := exportObjections(path, false, rows); err != nil {
+		t.Fatal(err)
+	}
+	good, _ := os.ReadFile(path)
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Fatalf("the backup must be private, got %v", st.Mode().Perm())
+	}
+	if err := exportObjections(path, false, rows); err == nil {
+		t.Fatal("an existing backup was overwritten without --overwrite")
+	}
+	if err := exportObjections(path, true, nil); err == nil {
+		t.Fatal("an empty backup replaced a good one")
+	}
+	if now, _ := os.ReadFile(path); !bytes.Equal(now, good) {
+		t.Fatal("a refused export changed the file")
+	}
+	more := []ingest.Objection{rows[0], {Key: "r900000006", CreatedAt: at}}
+	if err := exportObjections(path, true, more); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := os.Open(path)
+	defer f.Close()
+	if got, err := readObjections(f); err != nil || len(got) != 2 {
+		t.Fatalf("after --overwrite: %v %v", got, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".objections-*")); len(left) != 0 {
+		t.Fatalf("temporary files left behind: %v", left)
 	}
 }

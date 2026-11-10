@@ -11,9 +11,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17", "18"]
     services:
       postgres:
-        image: postgres:18
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -73,17 +77,37 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/readyz)" = 503
           test "$(curl -s -o /dev/null -w '%{http_code}' 'localhost:8080/v1/search?q=x')" = 401
           test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = 0
-      - name: "roles: no register process is a superuser, and the API role cannot write"
+      - name: "roles: no register process is a superuser, and each role is held to its job"
         working-directory: deploy/compose
         run: |
           sql() { docker compose exec -T postgres psql -U postgres -d register -At -c "$1"; }
           test "$(sql "select count(*) from pg_roles where rolname like 'register\_%' and (rolsuper or rolcreaterole or rolcreatedb or rolbypassrls)")" = 0
-          test "$(sql "select count(*) from pg_roles where rolname in ('register_migrate','register_sync','register_api')")" = 3
-          as_api() { docker compose exec -T postgres sh -c 'PGPASSWORD=$(cat /run/secrets/api_password) psql -h 127.0.0.1 -U register_api -d register -At -v ON_ERROR_STOP=1 -c "$1"' sh "$1"; }
-          test "$(as_api 'select count(*) from sync_source')" = 0
-          ! as_api "insert into search_suppression (skey) values ('99900001')"
-          ! as_api "create table t (x int)"
-          ! as_api "copy (select 1) to program 'id'"
+          test "$(sql "select count(*) from pg_roles where rolname in ('register_migrate','register_sync','register_operator','register_api')")" = 4
+          # Connect the way the services do: from another container, over the network, with the
+          # password from the secret file (the database container itself trusts local connections).
+          as() { docker run --rm --network accquix-register_default postgres:18 psql "$(cat "secrets/$1")" -At -v ON_ERROR_STOP=1 -c "$2"; }
+          must_fail() { if as "$1" "$2"; then echo "::error::$1 was allowed: $2"; exit 1; fi; }
+          test "$(as database_url 'select count(*) from sync_source')" = 0
+          test "$(as sync_database_url 'select count(*) from objection')" = 0
+          test "$(as operator_database_url 'select count(*) from objection')" = 0
+          must_fail database_url "select reason from objection"
+          must_fail database_url "insert into objection (ico) values ('99900001')"
+          must_fail database_url "set default_transaction_read_only = off; delete from search_name where skey = 'x'"
+          must_fail database_url "create table t (x int)"
+          must_fail database_url "copy (select 1) to program 'id'"
+          must_fail sync_database_url "insert into objection (ico) values ('99900001')"
+          must_fail sync_database_url "update register_setup set objections_confirmed_at = now() where only_row"
+          must_fail operator_database_url "update rpo_record set name = 'x' where id = 1"
+          if docker run --rm --network accquix-register_default postgres:18 psql "postgres://register_api:wrong@postgres:5432/register?sslmode=disable" -c 'select 1'; then
+            echo "::error::a wrong password was accepted"; exit 1
+          fi
+      - name: "setup: nothing is served until the operator confirms the objections"
+        working-directory: deploy/compose
+        run: |
+          docker compose run --rm -T operator suppress --init-empty
+          docker compose run --rm -T operator suppress --subject 99900001 --reason ci
+          docker compose run --rm -T operator suppress --export --output /tmp/objections.tsv
+          if docker compose run --rm -T operator suppress --init-empty; then echo "::error::init-empty ran twice"; exit 1; fi
       - name: logs on failure
         if: failure()
         working-directory: deploy/compose

@@ -99,6 +99,15 @@ func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 	return out, rows.Err()
 }
 
+// ObjectionsConfirmed reports whether the operator confirmed the objections of this installation
+// (restored from a backup, or declared a new installation). Until then the API does not serve:
+// an empty database cannot tell a first installation from one that lost its objections.
+func (s *Store) ObjectionsConfirmed(ctx context.Context) (bool, error) {
+	var ok bool
+	err := s.Pool.QueryRow(ctx, `SELECT coalesce((SELECT objections_confirmed_at IS NOT NULL FROM register_setup WHERE only_row), false)`).Scan(&ok)
+	return ok, err
+}
+
 // Bootstrapping lists the sources not yet published; the API serves only when it is empty.
 func Bootstrapping(srcs map[string]SourceInfo) []string {
 	var missing []string

@@ -39,9 +39,12 @@ func New(pool *pgxpool.Pool, cfg Config) *Searcher {
 }
 
 // NotSuppressed filters objections again at query time (alias n = search_name). The sync already
-// leaves suppressed subjects out of the search layer; this second check means a row that is still
-// there for any reason (an interrupted refresh, a manual change to the tables) is never returned.
-const NotSuppressed = `NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = n.skey)`
+// leaves suppressed records out of the search layer; this second check means a row that is still
+// there for any reason (an interrupted refresh, a manual change to the tables) is never returned
+// for a subject whose key an active objection names. It reads the view objection_active: the keys
+// only, never the reasons.
+const NotSuppressed = `NOT EXISTS (SELECT 1 FROM objection_active x WHERE x.ico = n.ico)
+  AND NOT EXISTS (SELECT 1 FROM objection_active x WHERE n.ico IS NULL AND 'r' || x.rpo_id = n.skey)`
 
 // Hit is one matched name of a subject.
 type Hit struct {

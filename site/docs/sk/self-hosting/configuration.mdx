@@ -17,9 +17,12 @@ Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `N
 | `sync --every 1h` | Opakuje prechod, kým ho nezastavíte. Neúspešný prechod sa zaloguje; rozvrh pokračuje. |
 | `sync --unblock --source rpo` / `fs:<zoznam>` | Obnoví zdroj po zablokovaní validáciou. |
 | `serve` | HTTP API. |
-| `suppress --subject <IČO> [--undo] [--reason TEXT]` | Vyradí subjekt z vyhľadávania podľa názvu alebo ho vráti. |
-| `suppress --list` | Vypíše všetky námietky vo formáte zálohy. Výstup uchovávajte v súkromí. |
-| `suppress --restore FILE` | Obnoví zálohu (`-` číta štandardný vstup); spustite pred prvým `sync` znova zostavenej databázy. |
+| `suppress --subject <IČO> [--reason TEXT]` | Zaznamená námietku: vyradí subjekt z vyhľadávania podľa názvu. Vypíše číslo námietky. |
+| `suppress --undo --id N` | Odvolá jednu námietku a oznámi, či subjekt stále skrýva iná. |
+| `suppress --list` | Vypíše všetky námietky s ich číslami. |
+| `suppress --export --output FILE [--overwrite]` | Zapíše zálohu námietok. Súbor uchovávajte v súkromí. |
+| `suppress --restore FILE` | Obnoví zálohu (`-` číta štandardný vstup) a potvrdí inštaláciu. |
+| `suppress --init-empty` | Potvrdí novú inštaláciu bez námietok na obnovenie. |
 | `openapi` | Vypíše dokument OpenAPI 3.1. |
 | `version` | Vypíše verziu. |
 
@@ -32,7 +35,9 @@ chyba v príkazovom riadku.
 | --- | --- | --- |
 | `REGISTER_DATABASE_URL` (tajomstvo) | — | Pripojenie k PostgreSQL; používa ho `serve`. |
 | `REGISTER_MIGRATE_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `migrate`, napríklad s rolou pre DDL. |
-| `REGISTER_SYNC_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `sync` a `suppress`. Priame spojenie, nie pooler. |
+| `REGISTER_SYNC_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `sync`. Priame spojenie, nie pooler. |
+| `REGISTER_OPERATOR_DATABASE_URL` (tajomstvo) | `REGISTER_SYNC_DATABASE_URL` | Pre `suppress`: rola, ktorá môže meniť námietky. Priame spojenie. |
+| `REGISTER_DB_ROLE_API`, `_SYNC`, `_OPERATOR` | — | Názvy databázových rolí; `migrate` každej pridelí presne tie práva na tabuľky, ktoré potrebuje. Bez nastavenia sa nepridelí nič. |
 | `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. Logy nikdy neobsahujú mená, dopyty ani identifikátory. |
 
 ## Synchronizácia
@@ -48,8 +53,9 @@ chyba v príkazovom riadku.
 | `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | Menší nový snapshot zablokuje označovanie chýbajúcich záznamov. |
 | `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: označovanie chýbajúcich nad týmto podielom aktívnych záznamov sa zablokuje. |
 | `REGISTER_RPO_DATE_SKEW_DAYS` | `1` | RPO: súbor, ktorého `exportDate` sa od dátumu v názve líši o viac dní, sa odmietne; dátum po zajtrajšku vždy. |
-| `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS` | `2000000` | RPO: prvý snímok s menším počtom záznamov sa nezverejní. |
-| `REGISTER_FS_SKIP_MIN_ROWS` | `false` | Vypne minimálne počty riadkov veľkých zoznamov (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000). |
+| `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS` | `2200000` | RPO: prvý snímok s menším počtom záznamov sa nezverejní. |
+| `REGISTER_RPO_SNAPSHOT_SETTLE` | `2h` | RPO: snímok sa použije, až keď je jeho najnovší súbor v úložisku aspoň takto dlho. |
+| `REGISTER_FS_SKIP_MIN_ROWS` | `false` | Vypne minimálne počty riadkov zoznamov (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000, `ds_dphv` 10 000, `ds_dphz` 1 000, `ds_dpho` 300). |
 | `REGISTER_FS_MAX_DROP` | podľa zoznamu | Prepíše prah poklesu pre všetky zoznamy (predvolene 0,03 pre `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0,20 pre malé zoznamy). |
 
 ## API

@@ -1,10 +1,16 @@
 # Accquix Register, reference self-hosted deployment.
 # See docs/self-hosting.md. Create the secret files first with ./make-secrets.sh (no default
 # credentials). Each process gets its own database role and only its own secret:
-#   migrate  register_migrate  owns the schema            secrets/migrate_database_url
-#   sync     register_sync     reads and writes tables    secrets/sync_database_url
-#   serve    register_api      SELECT only                secrets/database_url, secrets/api_keys
-# The roles are created by initdb/10-roles.sh when the pgdata volume is first initialised.
+#   migrate   register_migrate   owns the schema, grants the others their table rights
+#   sync      register_sync      writes the mirror and the search layer
+#   operator  register_operator  changes the objections (`docker compose run --rm operator suppress …`)
+#   serve     register_api       reads the published data, nothing else
+# The roles are created by initdb/10-roles.sh when the pgdata volume is first initialised
+# (an older volume: ./upgrade-roles.sh).
+#
+# After the first start, confirm the objections of this installation, or the API stays not ready:
+#   a new installation:   docker compose run --rm operator suppress --init-empty
+#   a rebuilt one:        docker compose run --rm -T operator suppress --restore - < objections.tsv
 name: accquix-register
 
 x-register: &register
@@ -21,7 +27,7 @@ services:
     environment:
       POSTGRES_DB: register
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets: [postgres_password, migrate_password, sync_password, api_password]
+    secrets: [postgres_password, migrate_password, sync_password, operator_password, api_password]
     volumes:
       - pgdata:/var/lib/postgresql
       - ./initdb:/docker-entrypoint-initdb.d:ro
@@ -38,6 +44,10 @@ services:
     command: ["migrate"]
     environment:
       REGISTER_MIGRATE_DATABASE_URL_FILE: /run/secrets/migrate_database_url
+      # migrate grants each role exactly the table rights it needs
+      REGISTER_DB_ROLE_API: register_api
+      REGISTER_DB_ROLE_SYNC: register_sync
+      REGISTER_DB_ROLE_OPERATOR: register_operator
       REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
     secrets: [migrate_database_url]
     restart: "no"
@@ -55,6 +65,20 @@ services:
     secrets: [sync_database_url]
     volumes:
       - work:/var/lib/accquix-register
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Not started by `up`: run it for objections, e.g. `docker compose run --rm operator suppress --list`.
+  operator:
+    <<: *register
+    profiles: [operator]
+    entrypoint: ["/usr/local/bin/accquix-register"]
+    command: ["suppress", "--list"]
+    environment:
+      REGISTER_OPERATOR_DATABASE_URL_FILE: /run/secrets/operator_database_url
+    secrets: [operator_database_url]
+    restart: "no"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -81,12 +105,16 @@ secrets:
     file: ./secrets/migrate_password
   sync_password:
     file: ./secrets/sync_password
+  operator_password:
+    file: ./secrets/operator_password
   api_password:
     file: ./secrets/api_password
   migrate_database_url:
     file: ./secrets/migrate_database_url
   sync_database_url:
     file: ./secrets/sync_database_url
+  operator_database_url:
+    file: ./secrets/operator_database_url
   database_url:
     file: ./secrets/database_url
   api_keys:

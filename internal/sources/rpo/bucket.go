@@ -34,8 +34,9 @@ func NewBucket(baseURL string) *Bucket {
 
 type listResult struct {
 	Contents []struct {
-		Key  string `xml:"Key"`
-		Size int64  `xml:"Size"`
+		Key          string    `xml:"Key"`
+		Size         int64     `xml:"Size"`
+		LastModified time.Time `xml:"LastModified"`
 	} `xml:"Contents"`
 	IsTruncated           bool   `xml:"IsTruncated"`
 	NextContinuationToken string `xml:"NextContinuationToken"`
@@ -69,7 +70,7 @@ func (b *Bucket) List(ctx context.Context, prefix string) ([]Object, error) {
 			return nil, fmt.Errorf("list %s: %w", prefix, err)
 		}
 		for _, c := range lr.Contents {
-			out = append(out, Object{Key: c.Key, Size: c.Size})
+			out = append(out, Object{Key: c.Key, Size: c.Size, Modified: c.LastModified})
 		}
 		if !lr.IsTruncated || lr.NextContinuationToken == "" {
 			return out, nil

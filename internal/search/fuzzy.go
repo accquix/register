@@ -107,8 +107,8 @@ func (s *Searcher) corrections(ctx context.Context, w string, last bool) ([]stri
 	rows, err := tx.Query(ctx, `SELECT c.word, c.freq FROM (
   SELECT word, freq, similarity(word, $1) AS sim FROM search_word WHERE word % $1
   ORDER BY sim DESC, freq DESC LIMIT 60) c
-WHERE EXISTS (SELECT 1 FROM search_token t WHERE t.token = c.word
-  AND NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = t.skey))
+WHERE EXISTS (SELECT 1 FROM search_token t JOIN search_name n ON n.skey = t.skey WHERE t.token = c.word
+  AND `+NotSuppressed+`)
 ORDER BY c.sim DESC, c.freq DESC`, w)
 	if err != nil {
 		return nil, 0, err
