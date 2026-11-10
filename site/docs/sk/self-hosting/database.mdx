@@ -1,0 +1,56 @@
+---
+title: Databáza
+description: Roly, spojenia, spravované PostgreSQL a prečo netreba zálohy.
+---
+
+## Roly
+
+Oddelené roly udržia API len na čítanie:
+
+```sql
+CREATE ROLE register_migrate LOGIN PASSWORD '…';   -- vlastní schému, spúšťa migrate
+CREATE ROLE register_sync    LOGIN PASSWORD '…';
+CREATE ROLE register_api     LOGIN PASSWORD '…';
+
+-- po `migrate` ako register_migrate:
+GRANT USAGE ON SCHEMA public TO register_sync, register_api;
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO register_sync;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO register_sync;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO register_api;
+
+-- tabuľky pridané neskoršími migráciami dostanú rovnaké práva:
+ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO register_sync;
+ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
+  GRANT SELECT ON TABLES TO register_api;
+```
+
+Potom nasmerujte každý režim na jeho rolu:
+
+| Premenná | Rola | Spojenie |
+| --- | --- | --- |
+| `REGISTER_MIGRATE_DATABASE_URL` | `register_migrate` | Priame |
+| `REGISTER_SYNC_DATABASE_URL` | `register_sync` | **Priame** (advisory lock, COPY, dočasné tabuľky) |
+| `REGISTER_DATABASE_URL` | `register_api` | Priame alebo transakčný pooler |
+
+Synchronizácia vytvára dočasné tabuľky, preto jej rola potrebuje právo `TEMPORARY` na databázu (predvolene ho má
+`PUBLIC`). Pri spravovaných databázach použite `sslmode=verify-full`.
+
+## Spravovaní poskytovatelia
+
+| Poskytovateľ | Poznámky |
+| --- | --- |
+| PlanetScale Postgres | Kompatibilné s `pg_strict`: register nikdy nespúšťa `UPDATE` ani `DELETE` bez `WHERE`. Port 5432 pre synchronizáciu, 6432 (PgBouncer) pre API. |
+| Neon | Funguje. Pri pláne Launch nemá databáza zoznam povolených IP, spoliehajte sa na TLS a heslá rolí. |
+| Supabase, RDS, obyčajný PostgreSQL | Fungujú bez úprav. |
+
+## Veľkosť a rast
+
+Asi 2,3 GB dát s indexmi, rastie spolu s registrami (niekoľko percent ročne). Slovník slov pre približné
+vyhľadávanie pridá asi 10 MB.
+
+## Zálohy netreba
+
+Databázu možno vždy znova zostaviť z oficiálnych zdrojov: zmažte ju, spustite `migrate` a `sync`. Verzie častí sú
+odtlačky obsahu, takže po opätovnom zostavení vaši klienti uvidia rovnaké verzie a žiadne falošné zmeny. Vašimi
+vlastnými dátami je len zoznam námietok (`search_suppression`): evidujte ho aj inde alebo zálohujte túto tabuľku.

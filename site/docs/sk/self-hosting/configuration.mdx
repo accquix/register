@@ -1,0 +1,63 @@
+---
+title: Konfigurácia
+description: Všetky príkazy a premenné prostredia.
+---
+
+Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `NAME` možno namiesto toho zadať ako
+`NAME_FILE`, cestu k súboru s hodnotou; zadať obe naraz je chyba.
+
+## Príkazy
+
+| Príkaz | Čo robí |
+| --- | --- |
+| `migrate [up]` | Aplikuje vstavané migrácie schémy. |
+| `migrate status` | Vypíše migrácie a či je každá aplikovaná. |
+| `migrate down-to N` | Vráti schému na verziu N (0 = prázdna schéma). Na vývoj. |
+| `sync [--source rpo\|fs\|all]` | Jeden prechod synchronizácie (predvolene `all`). |
+| `sync --every 1h` | Opakuje prechod, kým ho nezastavíte. Neúspešný prechod sa zaloguje; rozvrh pokračuje. |
+| `sync --unblock --source rpo` / `fs:<zoznam>` | Obnoví zdroj po zablokovaní validáciou. |
+| `serve` | HTTP API. |
+| `suppress --subject <IČO> [--undo] [--reason TEXT]` | Vyradí subjekt z vyhľadávania podľa názvu alebo ho vráti. |
+| `openapi` | Vypíše dokument OpenAPI 3.1. |
+| `version` | Vypíše verziu. |
+
+Návratové kódy: `0` úspech (aj keď zámok drží iná synchronizácia), `1` chyba (vrátane zablokovaného zdroja), `2`
+chyba v príkazovom riadku.
+
+## Databáza
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_DATABASE_URL` (tajomstvo) | — | Pripojenie k PostgreSQL; používa ho `serve`. |
+| `REGISTER_MIGRATE_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `migrate`, napríklad s rolou pre DDL. |
+| `REGISTER_SYNC_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `sync` a `suppress`. Priame spojenie, nie pooler. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. Logy nikdy neobsahujú mená, dopyty ani identifikátory. |
+
+## Synchronizácia
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_RPO_BUCKET_URL` | oficiálne úložisko | Základná adresa hromadných súborov RPO. |
+| `REGISTER_FS_BASE_URL` | `https://report.financnasprava.sk` | Základná adresa exportov zoznamov. |
+| `REGISTER_WORK_DIR` | `<temp>/accquix-register` | Rozpracované sťahovania. |
+| `REGISTER_DOWNLOAD_CONCURRENCY` | `6` | Paralelné sťahovanie častí snapshotu. |
+| `REGISTER_RPO_PART_RECORDS` | `100000` | Počet záznamov v každej časti snapshotu okrem poslednej. |
+| `REGISTER_RPO_DAILY_MAX_RECORDS` | `20000` | Väčší denný súbor sa odmietne. |
+| `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | Menší nový snapshot zablokuje označovanie chýbajúcich záznamov. |
+| `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: označovanie chýbajúcich nad týmto podielom aktívnych záznamov sa zablokuje. |
+| `REGISTER_FS_MAX_DROP` | podľa zoznamu | Prepíše prah poklesu pre všetky zoznamy (predvolene 0,03 pre `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0,20 pre malé zoznamy). |
+
+## API
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_LISTEN` | `:8080` | Adresa, na ktorej API počúva. |
+| `REGISTER_API_KEYS` (tajomstvo) | — | `meno:sha256hex,…`: odtlačky kľúčov. |
+| `REGISTER_ALLOW_ANONYMOUS` | `false` | Prevádzka bez kľúčov; vypne overenie fyzických osôb podľa DIČ. |
+| `REGISTER_SEARCH_FUZZY` | `true` | Zapne `mode=fuzzy`. |
+| `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket pre každého klienta a inštanciu. |
+| `REGISTER_FUZZY_EVERY` | `5s` | Jedno približné vyhľadávanie na klienta za interval (nárazovo 2). |
+| `REGISTER_FUZZY_CONCURRENCY` | `1` | Súbežné približné vyhľadávania na inštanciu. |
+| `REGISTER_FUZZY_TIMEOUT` | `2s` | Časový limit približného vyhľadávania. |
+| `REGISTER_QUERY_TIMEOUT` | `3s` | Časový limit predvoleného vyhľadávania a overenia. |
+| `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | Adaptívny krok podľa slov v predvolenom vyhľadávaní. |

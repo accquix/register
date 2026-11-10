@@ -84,6 +84,12 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 	hc.CreateHooks = nil // no $schema links in bodies
 	hc.Components.SecuritySchemes = map[string]*huma.SecurityScheme{"bearer": {Type: "http", Scheme: "bearer"}}
 	hc.Security = []map[string][]string{{"bearer": {}}}
+	hc.Servers = []*huma.Server{{URL: "http://localhost:8080", Description: "Your instance (docker compose default)"}}
+	hc.Tags = []*huma.Tag{
+		{Name: "Search", Description: "Search by name or identifier. Search proposes; resolve with a lookup."},
+		{Name: "Lookup", Description: "Subjects by IČO, DIČ or IČ DPH, with sections, states and versions."},
+		{Name: "Service", Description: "Data freshness and what this instance offers."},
+	}
 	api := humachi.New(router, hc)
 	s.register(api)
 	router.Get("/livez", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
@@ -197,19 +203,19 @@ type CapabilitiesOutput struct{ Body CapabilitiesBody }
 
 func (s *Server) register(api huma.API) {
 	errs := []int{400, 401, 429, 503}
-	huma.Register(api, huma.Operation{OperationID: "search", Method: http.MethodGet, Path: "/v1/search", Summary: "Search by name or identifier",
+	huma.Register(api, huma.Operation{OperationID: "search", Tags: []string{"Search"}, Method: http.MethodGet, Path: "/v1/search", Summary: "Search by name or identifier",
 		Description: "One box: an identifier gives an exact match; anything else is a name search (diacritics and word order ignored, " +
 			"start of any word matched). mode=fuzzy corrects typos and is rate-limited. Search proposes; resolve with /v1/lookup/{id}.",
 		Errors: errs}, s.search)
-	huma.Register(api, huma.Operation{OperationID: "lookup", Method: http.MethodGet, Path: "/v1/lookup/{id}", Summary: "Look up by IČO, DIČ or IČ DPH",
+	huma.Register(api, huma.Operation{OperationID: "lookup", Tags: []string{"Lookup"}, Method: http.MethodGet, Path: "/v1/lookup/{id}", Summary: "Look up by IČO, DIČ or IČ DPH",
 		Description: "Sections identity (RPO), tax, vat and risk (Financial Administration lists), each with state present/absent/unknown, " +
 			"source as-of date and a content version. 404 only when every consulted dataset is fresh.",
 		Errors: []int{400, 401, 403, 404, 429, 503}}, s.lookup)
-	huma.Register(api, huma.Operation{OperationID: "lookupBatch", Method: http.MethodPost, Path: "/v1/lookup:batch", Summary: "Look up up to 100 identifiers",
+	huma.Register(api, huma.Operation{OperationID: "lookupBatch", Tags: []string{"Lookup"}, Method: http.MethodPost, Path: "/v1/lookup:batch", Summary: "Look up up to 100 identifiers",
 		Description: "fields=versions returns only the section versions, for daily change checks.", Errors: errs}, s.batch)
-	huma.Register(api, huma.Operation{OperationID: "sources", Method: http.MethodGet, Path: "/v1/sources", Summary: "Data freshness per source",
+	huma.Register(api, huma.Operation{OperationID: "sources", Tags: []string{"Service"}, Method: http.MethodGet, Path: "/v1/sources", Summary: "Data freshness per source",
 		Errors: []int{401, 503}}, s.sources)
-	huma.Register(api, huma.Operation{OperationID: "capabilities", Method: http.MethodGet, Path: "/v1/capabilities", Summary: "What this instance offers",
+	huma.Register(api, huma.Operation{OperationID: "capabilities", Tags: []string{"Service"}, Method: http.MethodGet, Path: "/v1/capabilities", Summary: "What this instance offers",
 		Errors: []int{401}}, s.capabilities)
 }
 

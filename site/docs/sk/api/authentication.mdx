@@ -1,0 +1,40 @@
+---
+title: Overenie prístupu
+description: Kľúče API, explicitný anonymný režim a verejné endpointy.
+---
+
+Každý dátový endpoint vyžaduje kľúč API, posielaný ako Bearer token:
+
+```sh
+curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?q=zlata"
+```
+
+## Kľúče
+
+Inštancia uchováva **iba odtlačky SHA-256** svojich kľúčov, v `REGISTER_API_KEYS`, ako dvojice `meno:odtlačok`:
+
+```sh
+KEY=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+printf %s "$KEY" | sha256sum      # do REGISTER_API_KEYS vložte "pro:<odtlačok>"
+```
+
+Meno kľúča sa objaví v prístupovom logu a je jednotkou limitov požiadaviek. Každý klient by mal mať vlastný kľúč.
+Nesprávny kľúč sa vždy odmietne s `401`, aj keď je anonymný prístup zapnutý.
+
+## Anonymný režim
+
+Bez kľúčov sa `serve` odmietne spustiť. Ak chcete API prevádzkovať bez kľúčov, nastavte výslovne
+`REGISTER_ALLOW_ANONYMOUS=true`. Potom:
+
+- požiadavky bez hlavičky `Authorization` sú povolené a limitované podľa IP adresy klienta;
+- overenie fyzických osôb bez IČO podľa DIČ nie je dostupné (`403`), aby boli ich údaje chránené;
+- `/v1/capabilities` uvádza `anonymous: true`.
+
+## Verejné endpointy
+
+Bez kľúča odpovedajú: `/livez`, `/readyz`, `/openapi.json` a `/openapi.yaml`.
+
+## Čo sa loguje
+
+Prístupový log zaznamenáva cestu, stav, trvanie a meno kľúča. Nikdy nezaznamená vyhľadávací dopyt, identifikátor v
+ceste ani žiadne dáta.

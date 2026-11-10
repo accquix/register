@@ -1,0 +1,55 @@
+---
+title: Docker compose
+description: Referenčné nasadenie, jeho služby, tajomstvá a nastavenia.
+---
+
+`deploy/compose/compose.yaml` je referenčné nasadenie:
+
+| Služba | Spúšťa | Životný cyklus |
+| --- | --- | --- |
+| `postgres` | PostgreSQL 18 | Beží trvalo, s kontrolou zdravia |
+| `migrate` | `accquix-register migrate` | Spustí sa raz po tom, čo je PostgreSQL pripravený, skončí s kódom 0 |
+| `sync` | `accquix-register sync --every 1h` | Beží trvalo; jeden prechod za hodinu |
+| `serve` | `accquix-register serve` | Beží trvalo; API na porte 8080 |
+
+`sync` a `serve` sa spustia až po úspešnom `migrate`.
+
+## Tajomstvá
+
+Žiadne predvolené prihlasovacie údaje neexistujú. `make-secrets.sh` vytvorí tri súbory v `secrets/`:
+
+<FileTree>
+- deploy/compose/
+  - compose.yaml
+  - make-secrets.sh
+  - secrets/
+    - postgres_password
+    - database_url
+    - api_keys
+</FileTree>
+
+Priečinok je súkromný (práva 0700) a súbory v ňom sú čitateľné (0644). Compose ich pripojí tak, ako sú, a kontajnery
+nebežia pod vaším používateľom: register beží ako uid 65532. Ak súbory zapisujete sami, nastavte rovnaké práva, inak
+register skončí s `permission denied` na `/run/secrets/...`.
+
+## Nastavenia
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_PUBLISH` | `127.0.0.1:8080` | Kde sa API zverejní na hostiteľovi. `0.0.0.0:8080` použite len za vlastným TLS proxy. |
+| `REGISTER_SYNC_EVERY` | `1h` | Interval medzi prechodmi synchronizácie (najmenej `1m`). |
+| `REGISTER_SEARCH_FUZZY` | `true` | Približné vyhľadávanie zapnuté alebo vypnuté. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn` alebo `error`. |
+| `REGISTER_IMAGE` | `accquix-register:local` | Použiť vydaný obraz namiesto zostavenia zo zdrojového kódu. |
+
+Ostatné premenné sú v [Konfigurácii](/sk/self-hosting/configuration).
+
+## Bežné úlohy
+
+```sh
+docker compose logs -f sync                       # sledovať synchronizáciu
+docker compose exec serve accquix-register version
+docker compose run --rm sync sync --source fs     # jeden prechod navyše pre zoznamy FS
+docker compose down                               # zastaviť; dáta zostanú vo zväzku pgdata
+docker compose down -v                            # zastaviť a zmazať dáta (ďalšia synchronizácia ich zostaví znova)
+```

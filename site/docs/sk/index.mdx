@@ -1,0 +1,60 @@
+---
+title: Accquix Register
+sidebar:
+  label: Úvod
+description: Vlastná prehľadávateľná kópia slovenských obchodných registrov s malým API na vyhľadávanie a overenie. Open source, prevádzka na vlastnej infraštruktúre, bez predplatného.
+---
+
+Accquix Register vytvára a udržiava **vašu vlastnú databázu slovenských firiem a živnostníkov** z oficiálnych
+verejných registrov a sprístupňuje ju cez malé HTTP API len na čítanie: jedno inteligentné vyhľadávacie pole a
+overenie podľa IČO, DIČ alebo IČ DPH.
+
+Dáta sú verejné, no roztrúsené medzi úradmi, a komerčné API si účtujú za každú požiadavku alebo ročne. Bezplatné API
+Štatistického úradu, ktoré používalo mnoho nástrojov, prestalo odpovedať, keď register právnických osôb v júni 2026
+prešiel pod Ministerstvo vnútra. Accquix Register číta oficiálne hromadné súbory priamo, takže vaša inštancia
+nezávisí od cudzích limitov.
+
+<CardGroup cols={2}>
+  <Card title="Rýchly štart" icon="rocket" href="/sk/quickstart">
+    Spustite celé riešenie cez docker compose a pošlite prvú požiadavku približne za 15 minút.
+  </Card>
+  <Card title="Ako to funguje" icon="workflow" href="/sk/concepts/how-it-works">
+    Zdroje, synchronizácia, vyhľadávacia vrstva a API, a čo každá časť garantuje.
+  </Card>
+  <Card title="Práca s API" icon="code" href="/sk/api/search">
+    Vyhľadávanie, overenie, sledovanie zmien, chyby a limity s príkladmi.
+  </Card>
+  <Card title="API referencia" icon="book-open" href="/sk/reference">
+    Všetky endpointy, parametre a schémy odpovedí, generované z dokumentu OpenAPI.
+  </Card>
+</CardGroup>
+
+## Čo získate
+
+- **Zrkadlo oficiálnych zdrojov** vo vašom PostgreSQL:
+  - register právnických osôb (RPO) Ministerstva vnútra: názvy, adresy, právne formy, zápisy (súd, oddiel a
+    vložka alebo živnostenský úrad a číslo);
+  - zoznamy Finančnej správy: DIČ, IČ DPH a paragraf registrácie, index spoľahlivosti a rizikové zoznamy.
+- **Denné aktualizácie**, ktoré možno kedykoľvek prerušiť a ktoré bezpečne pokračujú.
+- **Jedno vyhľadávacie pole** pre názov, IČO, DIČ aj IČ DPH. Ignoruje diakritiku a poradie slov, nájde začiatok
+  ktoréhokoľvek slova a voliteľne opraví preklepy.
+- **Overenie**, ktoré pri každej časti odpovede uvádza zdroj, dátum aktuálnosti a verziu na sledovanie zmien a
+  úprimne povie, keď niečo nevie.
+- **Jeden binárny súbor v Go** a obyčajný PostgreSQL. Obraz má 24 MB; `docker compose up` spustí všetko.
+
+## Čo to nie je
+
+:::note
+- **Projekt nezverejňuje žiadne dáta.** Vaša inštancia si dáta sťahuje z oficiálnych zdrojov a vy ste
+  prevádzkovateľom svojej kópie podľa GDPR. Pozrite [Dáta a súkromie](/sk/project/data-and-privacy).
+- **Žiadne verejné hostované API.** Prevádzkujte si vlastné.
+- **Žiadna história.** Register drží aktuálny stav každého záznamu a čas jeho poslednej zmeny.
+- **Nie je to orákulum platnosti DPH.** Uvádza, čo hovoria zoznamy Finančnej správy, a k akému dátumu. Pri IČ DPH
+  iných štátov EÚ sa pýtajte priamo VIES.
+:::
+
+## Stav
+
+Accquix Register je vo vývoji a zatiaľ nemá vydanie. Už teraz synchronizuje skutočné zdroje a obsluhuje API.
+Vyvíja a udržiava ho [Accquix](https://accquix.com) a zverejňuje pod licenciou Apache-2.0, aby ho mohol
+prevádzkovať ktokoľvek.

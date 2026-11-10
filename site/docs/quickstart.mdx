@@ -1,0 +1,78 @@
+---
+title: Quick start
+description: Run Accquix Register with docker compose, wait for the first sync, and make your first search and lookup.
+---
+
+You need Docker with the compose plugin, about 10 GB of free disk and outbound HTTPS. The first sync downloads
+about 1 GB and takes 10–20 minutes, mostly downloading.
+
+<Steps>
+  <Step title="Get the code">
+    ```sh
+    git clone https://github.com/accquix/register
+    cd register/deploy/compose
+    ```
+  </Step>
+  <Step title="Create the secrets">
+    ```sh
+    ./make-secrets.sh
+    ```
+    This writes a random database password and one API key into `secrets/`. **The API key is printed once:**
+    store it now. Only its SHA-256 hash is kept.
+  </Step>
+  <Step title="Start the stack">
+    ```sh
+    docker compose up -d
+    ```
+    Compose starts PostgreSQL 18, applies the schema (`migrate`), then starts the API (`serve`) and the hourly
+    sync (`sync --every 1h`).
+  </Step>
+  <Step title="Wait for the first sync">
+    ```sh
+    docker compose logs -f sync
+    curl -s localhost:8080/readyz
+    ```
+    Until every source is published, the API answers `503` with the reason `bootstrapping`. When the sync logs
+    `fs list applied` for the last list, `/readyz` answers `ready`.
+  </Step>
+  <Step title="Search and look up">
+    ```sh
+    export KEY=<your key>
+    curl -s -H "Authorization: Bearer $KEY" "localhost:8080/v1/search?q=zlata%20ryb"
+    curl -s -H "Authorization: Bearer $KEY" "localhost:8080/v1/lookup/99900001"
+    ```
+  </Step>
+</Steps>
+
+A search returns candidates; a lookup by identifier returns the full subject:
+
+```json title="GET /v1/search?q=zlata ryb"
+{
+  "mode": "default",
+  "results": [
+    {
+      "ico": "99900001",
+      "name": "Zlatá Rybka, s.r.o.",
+      "municipality": "Fiktívne Mesto",
+      "kind": "legal_person",
+      "active": true
+    }
+  ],
+  "dataAsOf": "2026-11-10",
+  "attribution": [
+    "Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0",
+    "Zdroj údajov: Finančná správa SR"
+  ]
+}
+```
+
+:::tip
+The examples on this site use fictional subjects, such as "Zlatá Rybka, s.r.o." with IČO `99900001`. Your
+instance returns the real register data.
+:::
+
+## Next steps
+
+- [How it works](/concepts/how-it-works): what the sync does and what the answers guarantee.
+- [Using the API](/api/search): search, lookup and change detection.
+- [Self-hosting](/self-hosting/requirements): requirements, database roles, monitoring and upgrades.

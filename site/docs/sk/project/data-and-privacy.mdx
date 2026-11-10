@@ -1,0 +1,41 @@
+---
+title: Dáta a súkromie
+description: Licencie dát, uvedenie zdroja, ktoré vyžadujú, a vaše povinnosti prevádzkovateľa vlastnej kópie.
+---
+
+## Projekt neobsahuje žiadne dáta
+
+Repozitár obsahuje len kód: žiadne záznamy z registrov, žiadne výpisy, žiadne skutočné mená ani identifikátory v
+testoch. Každá inštancia si dáta sťahuje z oficiálnych zdrojov sama.
+
+## Licencie a uvedenie zdroja
+
+| Zdroj | Licencia | Uvedenie zdroja |
+| --- | --- | --- |
+| Register právnických osôb (RPO), Ministerstvo vnútra | CC BY 4.0 | „Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0“ |
+| Zoznamy Finančnej správy | CC0 podľa stránky exportov; podmienky portálu žiadajú uvedenie zdroja | „Zdroj údajov: Finančná správa SR“ |
+
+Každá odpoveď API obsahuje tieto texty v `attribution`. Ak dáta ukazujete iným, ukážte ich tiež.
+
+**Nikdy sa nesťahujú:** zoznamy IBAN Finančnej správy (`ds_dph_iban`, `ds_dph_oud`, CC BY-NC-ND: bez komerčného
+použitia) a VIES (jeho podmienky zakazujú zrkadlenie).
+
+## Vy ste prevádzkovateľ
+
+Asi 80 % záznamov RPO tvoria fyzické osoby, najčastejšie živnostníci. Ich obchodné meno a miesto podnikania sú
+osobné údaje, hoci ich zákon zverejňuje. Keď prevádzkujete inštanciu, ste prevádzkovateľom tejto kópie:
+
+- skôr, ako komukoľvek ponúknete vyhľadávanie podľa názvu, určte a zdokumentujte účel a právny základ;
+- nechajte API za kľúčmi (predvolené nastavenie);
+- námietky vybavujte príkazom `accquix-register suppress` (pozrite [Prevádzka](/sk/self-hosting/operations));
+- informujte používateľov, odkiaľ dáta pochádzajú a k akému dátumu.
+
+## Čo register ukladá
+
+| Ukladá a vracia | Nikdy neukladá |
+| --- | --- |
+| Obchodné meno, identifikátory, miesto podnikania alebo sídlo, právnu formu, zápis v registri, dátumy, stav | Bydlisko, ak sa líši od miesta podnikania, dátum narodenia, štatutárne orgány, spoločníkov, zástupcov |
+
+Fyzické osoby bez IČO, známe len podľa DIČ, nie sú nikdy vo vyhľadávaní podľa názvu; overenie podľa ich presného DIČ
+vráti len DIČ, meno a obec, a to iba overeným klientom. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
+nič nikam okrem požiadaviek na oficiálne zdroje: žiadna telemetria.

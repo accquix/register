@@ -1,0 +1,67 @@
+---
+title: Operations
+description: Monitoring, blocked sources, objections, upgrades and rebuilds.
+---
+
+## Monitoring
+
+| Check | What to watch |
+| --- | --- |
+| `GET /livez` | The process is up. |
+| `GET /readyz` | `503` until every source is first published, or when the database is unreachable. |
+| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`. |
+
+Alert when:
+
+- any source is **`blocked`**: validation stopped an update;
+- `rpo` stays in **`gap_wait`** for more than a day (a daily file is missing);
+- any source is **`stale`** (RPO older than 3 days, a list older than 2 days, the reliability index older than 14).
+
+## A blocked source
+
+A file that breaks a threshold is not applied: the previous data stays served, and the source is `blocked` with a
+diagnostic, for example `daily file has 25 000 records, more than 20 000`. Nothing else stops: the other sources keep
+updating.
+
+<Steps>
+  <Step title="Read the diagnostic">
+    `GET /v1/sources`, or the `sync` log.
+  </Step>
+  <Step title="Decide">
+    If the file is broken, wait: the agency usually republishes. If the change is real (a list really shrank), raise
+    the threshold for one run: `REGISTER_RPO_DAILY_MAX_RECORDS`, `REGISTER_FS_MAX_DROP`, `REGISTER_ABSENCE_MAX_RATIO`.
+  </Step>
+  <Step title="Unblock">
+    ```sh
+    accquix-register sync --unblock --source rpo          # or --source fs:ds_dphs
+    accquix-register sync                                   # the next pass retries the file
+    ```
+  </Step>
+</Steps>
+
+## Objections
+
+Natural persons, mostly sole traders, can object to appearing in name search. Keep the subject out of search; exact
+lookup by identifier keeps working:
+
+```sh
+accquix-register suppress --subject 99900004 --reason "ticket 123"
+accquix-register suppress --subject 99900004 --undo
+```
+
+The suppression is kept by IČO, so a new RPO record of the same person stays suppressed. Do not put personal data
+into `--reason`.
+
+## Upgrades
+
+1. Pull or build the new image.
+2. Run `accquix-register migrate`.
+3. Restart `serve` and `sync`.
+
+## Rebuild from scratch
+
+```sh
+docker compose down -v && docker compose up -d
+```
+
+The next sync downloads and publishes everything again in about 15 minutes. Versions stay the same.

@@ -618,6 +618,8 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: Internal Server Error
       summary: What this instance offers
+      tags:
+        - Service
   /v1/lookup/{id}:
     get:
       description: Sections identity (RPO), tax, vat and risk (Financial Administration lists), each with state present/absent/unknown, source as-of date and a content version. 404 only when every consulted dataset is fresh.
@@ -687,6 +689,8 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: Service Unavailable
       summary: Look up by IČO, DIČ or IČ DPH
+      tags:
+        - Lookup
   /v1/lookup:batch:
     post:
       description: fields=versions returns only the section versions, for daily change checks.
@@ -741,6 +745,8 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: Service Unavailable
       summary: Look up up to 100 identifiers
+      tags:
+        - Lookup
   /v1/search:
     get:
       description: "One box: an identifier gives an exact match; anything else is a name search (diacritics and word order ignored, start of any word matched). mode=fuzzy corrects typos and is rate-limited. Search proposes; resolve with /v1/lookup/{id}."
@@ -820,6 +826,8 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: Service Unavailable
       summary: Search by name or identifier
+      tags:
+        - Search
   /v1/sources:
     get:
       operationId: sources
@@ -849,5 +857,17 @@ paths:
                 $ref: "#/components/schemas/Problem"
           description: Service Unavailable
       summary: Data freshness per source
+      tags:
+        - Service
 security:
   - bearer: []
+servers:
+  - description: Your instance (docker compose default)
+    url: http://localhost:8080
+tags:
+  - description: Search by name or identifier. Search proposes; resolve with a lookup.
+    name: Search
+  - description: Subjects by IČO, DIČ or IČ DPH, with sections, states and versions.
+    name: Lookup
+  - description: Data freshness and what this instance offers.
+    name: Service

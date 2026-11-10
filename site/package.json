@@ -1,0 +1,16 @@
+{
+  "name": "accquix-register-docs",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build",
+    "preview": "blume preview",
+    "validate": "blume validate",
+    "doctor": "blume doctor"
+  },
+  "dependencies": {
+    "blume": "2.2.7"
+  }
+}

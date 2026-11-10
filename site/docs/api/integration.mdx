@@ -1,0 +1,43 @@
+---
+title: Integrating an application
+description: A checklist for using the register in an invoicing or accounting application.
+---
+
+The pattern that works for an application such as an invoicing tool:
+
+<Steps>
+  <Step title="Search proposes">
+    Show `/v1/search` results as the user types, with a debounce. Show the name, the IČO and the municipality:
+    two subjects can share a name.
+  </Step>
+  <Step title="Only an exact identifier resolves">
+    When the user picks a result, call `/v1/lookup/{ico}` and use that answer. Never fill a form from the first
+    search result on your own.
+  </Step>
+  <Step title="Keep the versions">
+    Store each section's `source.version` with your copy of the counterparty.
+  </Step>
+  <Step title="Check daily">
+    Once a day, call `/v1/lookup:batch` with `fields: "versions"` and show the user what changed. See
+    [Change detection](/api/changes).
+  </Step>
+</Steps>
+
+## Rules that keep documents correct
+
+- **Unknown is not "not found".** Treat `503`, `unknown` and `stale` as "unknown". An outage of the register must
+  not block issuing a document; let the user continue with the data they confirm.
+- **VAT wording.** Print "platiteľ DPH od …" only when `vat.payer` is `true`. §7 and §7a subjects have an IČ DPH but
+  are not VAT payers. See [VAT status](/concepts/vat).
+- **The register entry pre-fills; the user confirms.** `identity.registrations[]` gives the court and number for a
+  supplier's legal line. The genitive court name and the exact wording are yours to build.
+- **Cite the date.** "According to the Financial Administration list of 10 Nov 2026" is accurate;
+  "is a VAT payer" without a date is not.
+- **EU VAT numbers.** Query VIES yourself: the register does not mirror it.
+- **Attribution.** If you show the data to others, show the `attribution` texts the licences require.
+
+## Retries and outages
+
+- Retry safe `GET` requests after a connection error, with a backoff.
+- Honour `Retry-After` on `429`.
+- Read `/v1/capabilities` at start-up: whether fuzzy search is enabled, and the limits.

@@ -1,0 +1,52 @@
+---
+title: Change detection
+description: Use POST /v1/lookup:batch with section versions to find out daily which of your counterparties changed.
+---
+
+The register keeps no history and offers no change feed: a feed would let any key enumerate the whole database.
+Instead, a consumer stores each section's version and asks for the current versions of the subjects it cares about.
+
+## Store the versions
+
+When you save a counterparty, keep the `source.version` of each section from the lookup:
+
+```json
+{ "ico": "99900001", "identity": "4f2a…", "tax": "9c01…", "vat": "77be…", "risk": "1d3e…" }
+```
+
+## Ask for the current versions
+
+```sh
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"ids": ["99900001", "99900004", "12"], "fields": "versions"}' \
+  http://localhost:8080/v1/lookup:batch
+```
+
+```json
+{
+  "items": [
+    {
+      "id": "99900001",
+      "status": 200,
+      "versions": [
+        { "identity": { "state": "present", "version": "4f2a…" }, "tax": { "state": "present", "version": "9c01…" },
+          "vat": { "state": "present", "version": "81aa…" }, "risk": { "state": "present", "version": "1d3e…" } }
+      ]
+    },
+    { "id": "99900004", "status": 200, "versions": ["…"] },
+    { "id": "12", "status": 400, "code": "invalid_identifier" }
+  ],
+  "attribution": ["…"]
+}
+```
+
+Up to 100 identifiers per call. Each item carries the status the same id would get from `/v1/lookup/{id}`. Here the
+VAT version of `99900001` changed: look it up again and show the user what changed.
+
+## Notes
+
+- Versions are content hashes. A rebuild of the register from the sources gives the same versions, so a rebuild
+  does not flood your users with false changes.
+- `fields: "all"` (the default) returns the full lookups instead of versions.
+- Run the check once a day: the sources change daily at most.
+- A section that became `unknown` (stale source) did not change. Wait for fresh data before telling anyone.

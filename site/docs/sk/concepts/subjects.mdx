@@ -1,0 +1,49 @@
+---
+title: Subjekty a identifikátory
+description: Jeden subjekt na IČO so všetkými zápismi, ako sa porovnávajú identifikátory a zvláštnosti zdrojových dát.
+---
+
+## Jeden subjekt, viac zápisov
+
+V RPO môže mať jedno IČO **viac záznamov**: živnostník má jeden za každý zdrojový register (napríklad živnostenský
+register a register finančných agentov) a staršia firma môže mať uzavreté záznamy pobočiek. Približne 22 600 IČO má
+viac ako jeden aktívny záznam.
+
+Accquix Register ich spracúva ako **jeden subjekt**:
+
+- overenie vráti `identity.registrations[]`, jednu položku za každý záznam, s registrom, úradom, číslom, názvom v
+  tomto zázname a informáciou, či je aktívny;
+- **zobrazovaný názov** pochádza zo záznamu obchodného alebo živnostenského registra, inak z naposledy zmeneného
+  záznamu;
+- **každý oficiálny názov je vyhľadateľný**, takže živnostníka nájdete pod ktorýmkoľvek z jeho názvov;
+- záznam bez platného IČO má vlastnú identitu podľa svojho id v RPO.
+
+## Identifikátory sa porovnávajú presne
+
+| Zadané | Rozpoznané ako | Príklad |
+| --- | --- | --- |
+| 8 číslic | IČO | `99900001` |
+| 10 číslic | DIČ | `2099900001` |
+| `SK` + 10 číslic | IČ DPH | `SK2099900001` |
+
+Medzery sa ignorujú a prijme sa aj `sk`. Identifikátory sa **nikdy neporovnávajú približne**: IČO, ktoré sa líši o
+jednu číslicu, patrí inej, skutočnej firme.
+
+:::warning[Kontrolná číslica IČO je len upozornenie]
+Posledná číslica IČO je kontrolná (modulo 11). V skutočných dátach ju 778 IČO nesplní, 16 z nich patrí aktívnym
+subjektom. Preto sa IČO s nesprávnou kontrolnou číslicou nikdy neodmietne: ak v RPO existuje, vráti sa a
+`identity.icoChecksumValid` je `false`.
+:::
+
+**IČ DPH nie je jedinečný kľúč.** Členovia skupiny DPH (§4b) zdieľajú jedno IČ DPH, takže overenie podľa IČ DPH môže
+vrátiť viac subjektov.
+
+## Ako vyzerajú zdrojové dáta
+
+Tieto skutočnosti, zistené v reálnych súboroch, určujú, ako ich register číta:
+
+- asi 6 600 záznamov RPO má namiesto IČO textovú výplň; považujú sa za záznamy bez IČO;
+- niektoré IČO v zoznamoch Finančnej správy nemajú 8 číslic (najmä 12-ciferné čísla iného druhu);
+- RPO zapisuje PSČ ako `83237` aj `811 06`; register vracia tvar `NNN NN`;
+- pri zániku subjektu RPO uzavrie všetky údaje; register potom ukáže poslednú platnú hodnotu;
+- zoznam osobitnej úpravy DPH môže mať pre jeden subjekt viac období s rovnakým dátumom začiatku.

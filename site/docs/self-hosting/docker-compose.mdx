@@ -1,0 +1,55 @@
+---
+title: Docker compose
+description: The reference deployment, its services, secrets and settings.
+---
+
+`deploy/compose/compose.yaml` is the reference deployment:
+
+| Service | Runs | Lifecycle |
+| --- | --- | --- |
+| `postgres` | PostgreSQL 18 | Long-running, with a health check |
+| `migrate` | `accquix-register migrate` | Runs once after PostgreSQL is healthy, exits 0 |
+| `sync` | `accquix-register sync --every 1h` | Long-running; one pass an hour |
+| `serve` | `accquix-register serve` | Long-running; the API on port 8080 |
+
+`sync` and `serve` start only after `migrate` succeeded.
+
+## Secrets
+
+There are no default credentials. `make-secrets.sh` creates three files in `secrets/`:
+
+<FileTree>
+- deploy/compose/
+  - compose.yaml
+  - make-secrets.sh
+  - secrets/
+    - postgres_password
+    - database_url
+    - api_keys
+</FileTree>
+
+The directory is private (mode 0700) and the files inside are readable (0644). Compose mounts them as they are, and
+the containers do not run as your user: the register runs as uid 65532. If you write the files yourself, keep the
+same modes, or the register fails with `permission denied` on `/run/secrets/...`.
+
+## Settings
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REGISTER_PUBLISH` | `127.0.0.1:8080` | Where the API is published on the host. Use `0.0.0.0:8080` only behind your own TLS proxy. |
+| `REGISTER_SYNC_EVERY` | `1h` | Interval between sync passes (at least `1m`). |
+| `REGISTER_SEARCH_FUZZY` | `true` | Fuzzy search on or off. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+| `REGISTER_IMAGE` | `accquix-register:local` | Use a released image instead of building from source. |
+
+Every other variable is in [Configuration](/self-hosting/configuration).
+
+## Common tasks
+
+```sh
+docker compose logs -f sync                       # watch the sync
+docker compose exec serve accquix-register version
+docker compose run --rm sync sync --source fs     # one extra pass of the FS lists
+docker compose down                               # stop; data stays in the pgdata volume
+docker compose down -v                            # stop and delete the data (rebuilt by the next sync)
+```

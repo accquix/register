@@ -1,0 +1,56 @@
+---
+title: Freshness and certainty
+description: Section states, stale data, when the API says "not found", and section versions.
+---
+
+A mirror can be behind. Accquix Register never turns "I do not know" into "it does not exist".
+
+## Section states
+
+Every lookup section carries a `state`:
+
+| State | Meaning |
+| --- | --- |
+| `present` | The source has a row for this subject. |
+| `absent` | The source is **fresh** and has no row. This is a fact as of the source's date. |
+| `unknown` | The source was never published, or it is stale. The register does not know. |
+
+Values derived from a section follow the same rule. For example `vat.payer` is `true` or `false` only from a fresh
+list, and `null` otherwise.
+
+## Fresh and stale
+
+Each source carries the date the agency stamped on its data (`asOf`). A source is **stale** when that date is older
+than:
+
+| Source | Maximum age |
+| --- | --- |
+| RPO | 3 days |
+| Financial Administration lists | 2 days |
+| Reliability index (`ds_iz_ran`) | 14 days (it is refreshed irregularly) |
+
+A stale section is still returned, with `source.stale: true`. `GET /v1/sources` shows every source's state and date.
+
+## "Not found" only when it is true
+
+| Situation | Answer |
+| --- | --- |
+| Every consulted source is fresh and none has the identifier | `404 not_found` |
+| Not found, but a consulted source is stale | `503 unavailable`, reason `source_stale` |
+| The mirror is still being built | `503 unavailable`, reason `bootstrapping` |
+| Found, some sections stale | `200`, those sections flagged `stale` |
+
+Treat `503` and `unknown` as "unknown", never as "not found". An outage of the register must not block your
+workflow.
+
+## Versions
+
+Every section has `source.version`: a hash of its content. A rebuild from the sources yields the same versions, so a
+consumer can store the version with its copy and compare it later to see what changed. See
+[Change detection](/api/changes).
+
+## No history
+
+The register keeps the current state, when a row last changed (`changedAt`), and when it disappeared from a list
+(`absent_since`). A disappearance is an observation, never a legal date: for example, the Financial Administration
+publishes no VAT cancellation date, and a payer that loses its registration simply leaves the list.

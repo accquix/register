@@ -1,0 +1,73 @@
+name: docs
+
+# Builds the documentation site (site/, Blume) on every pull request that touches it, and deploys
+# it to Cloudflare Pages from main. Deployment needs two repository secrets:
+#   CLOUDFLARE_API_TOKEN   a token with "Cloudflare Pages: Edit"
+#   CLOUDFLARE_ACCOUNT_ID  the account that owns the Pages project
+# Without them the site is still built and checked; the deploy step is skipped.
+
+on:
+  pull_request:
+    paths: ["site/**", "api/openapi.yaml", ".github/workflows/docs.yml"]
+  push:
+    branches: [main]
+    paths: ["site/**", "api/openapi.yaml", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+
+env:
+  PAGES_PROJECT: accquix-register-docs
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - name: build (fails on content errors)
+        run: npx blume build
+      - name: check links
+        run: npx blume validate
+      - name: every English page has a Slovak page
+        run: diff <(cd docs && find . -name '*.mdx' -not -path './sk/*' | sort) <(cd docs/sk && find . -name '*.mdx' | sort)
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site/dist
+          retention-days: 7
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: dist
+      - name: skip without Cloudflare secrets
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        run: echo "::notice::Cloudflare secrets are not set; the site was built but not deployed."
+      - name: deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=main

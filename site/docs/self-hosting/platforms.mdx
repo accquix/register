@@ -1,0 +1,41 @@
+---
+title: Other platforms
+description: Running the image on any platform with a long-lived container and a scheduled job.
+---
+
+The image runs anywhere that offers a long-lived HTTP container and a scheduled job, against any PostgreSQL.
+
+| Part | How to run it |
+| --- | --- |
+| `serve` | A long-lived container on port 8080. Stateless: scale it horizontally behind a load balancer. |
+| `sync` | Either `sync --every 1h` as a long-running container, or a plain `sync` started by your scheduler every 1–2 hours. |
+| `migrate` | Run once before starting a new version. |
+
+Only one sync runs at a time (a PostgreSQL advisory lock); an overlapping start exits at once with nothing done.
+
+<Tabs>
+  <Tab title="Kubernetes">
+    A `Deployment` for `serve` and a `CronJob` (schedule `0 * * * *`, `concurrencyPolicy: Forbid`) running `sync`.
+    Run `migrate` as a `Job` or an init step of your release.
+  </Tab>
+  <Tab title="AWS ECS / Fargate">
+    A service for `serve` (0.25 vCPU / 0.5 GB is enough) and an EventBridge-scheduled task for `sync` (512 MB).
+  </Tab>
+  <Tab title="Google Cloud Run">
+    A Cloud Run service for `serve` and a Cloud Run job for `sync`, triggered by Cloud Scheduler.
+  </Tab>
+  <Tab title="Fly.io">
+    An always-on machine for `serve`; `sync --every 1h` in a second machine, or a scheduled machine.
+  </Tab>
+  <Tab title="A virtual machine">
+    The compose stack as it is, or the binary with systemd: a service for `serve` and a timer for `sync`.
+  </Tab>
+</Tabs>
+
+## Requirements for the platform
+
+- `sync` needs a writable work directory (`REGISTER_WORK_DIR`, about 1 GB on the first run) and **a direct
+  database connection**, not a transaction pooler: it holds an advisory lock and uses COPY.
+- `serve` can use a transaction pooler such as PgBouncer.
+- Outbound HTTPS to the RPO bucket and to `report.financnasprava.sk`.
+- If the database allows connections only from fixed IPs, `sync` and `serve` need a static egress IP.

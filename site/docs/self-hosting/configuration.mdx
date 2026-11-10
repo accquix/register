@@ -1,0 +1,63 @@
+---
+title: Configuration
+description: Every command and environment variable.
+---
+
+Configuration comes from environment variables only. Every secret `NAME` can instead be given as `NAME_FILE`, a path
+to a file holding the value; setting both is an error.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `migrate [up]` | Applies the embedded schema migrations. |
+| `migrate status` | Lists the migrations and whether each is applied. |
+| `migrate down-to N` | Rolls back to version N (0 = empty schema). For development. |
+| `sync [--source rpo\|fs\|all]` | One sync pass (default `all`). |
+| `sync --every 1h` | Repeats the pass until stopped. A failed pass is logged; the schedule continues. |
+| `sync --unblock --source rpo` / `fs:<list>` | Restores a source after a validation block. |
+| `serve` | The HTTP API. |
+| `suppress --subject <IČO> [--undo] [--reason TEXT]` | Keeps a subject out of name search, or puts it back. |
+| `openapi` | Prints the OpenAPI 3.1 document. |
+| `version` | Prints the version. |
+
+Exit codes: `0` success (also when another sync holds the lock), `1` failure (including a blocked source), `2` a
+command-line mistake.
+
+## Database
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REGISTER_DATABASE_URL` (secret) | — | PostgreSQL connection string; used by `serve`. |
+| `REGISTER_MIGRATE_DATABASE_URL` (secret) | `REGISTER_DATABASE_URL` | Used by `migrate`, for example with a DDL role. |
+| `REGISTER_SYNC_DATABASE_URL` (secret) | `REGISTER_DATABASE_URL` | Used by `sync` and `suppress`. A direct connection, not a pooler. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. Logs never contain names, queries or identifiers. |
+
+## Sync
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REGISTER_RPO_BUCKET_URL` | the official bucket | Base URL of the RPO bulk files. |
+| `REGISTER_FS_BASE_URL` | `https://report.financnasprava.sk` | Base URL of the list exports. |
+| `REGISTER_WORK_DIR` | `<temp>/accquix-register` | Downloads in progress. |
+| `REGISTER_DOWNLOAD_CONCURRENCY` | `6` | Parallel snapshot downloads. |
+| `REGISTER_RPO_PART_RECORDS` | `100000` | Records in every snapshot part except the last. |
+| `REGISTER_RPO_DAILY_MAX_RECORDS` | `20000` | A larger daily file is rejected. |
+| `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | A smaller new snapshot blocks absence marking. |
+| `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: absence marking above this share of active records is blocked. |
+| `REGISTER_FS_MAX_DROP` | per list | Overrides the drop threshold of every list (defaults: 0.03 for `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0.20 for the small lists). |
+
+## API
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REGISTER_LISTEN` | `:8080` | Listen address. |
+| `REGISTER_API_KEYS` (secret) | — | `name:sha256hex,…`: hashes of the keys. |
+| `REGISTER_ALLOW_ANONYMOUS` | `false` | Serve without keys; disables the natural-person DIČ lookup. |
+| `REGISTER_SEARCH_FUZZY` | `true` | Enables `mode=fuzzy`. |
+| `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket per caller, per instance. |
+| `REGISTER_FUZZY_EVERY` | `5s` | One fuzzy search per caller per interval (burst 2). |
+| `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches at once, per instance. |
+| `REGISTER_FUZZY_TIMEOUT` | `2s` | Timeout of a fuzzy search. |
+| `REGISTER_QUERY_TIMEOUT` | `3s` | Timeout of a default search or lookup. |
+| `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | The adaptive word step of the default search. |

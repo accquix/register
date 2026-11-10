@@ -1,0 +1,42 @@
+---
+title: Iné platformy
+description: Spustenie obrazu na ľubovoľnej platforme s trvalým kontajnerom a plánovanou úlohou.
+---
+
+Obraz beží všade, kde je k dispozícii trvalý HTTP kontajner a plánovaná úloha, s ľubovoľným PostgreSQL.
+
+| Časť | Ako ju spustiť |
+| --- | --- |
+| `serve` | Trvalý kontajner na porte 8080. Bez stavu: škálujte ho horizontálne za load balancerom. |
+| `sync` | Buď `sync --every 1h` ako trvalý kontajner, alebo obyčajný `sync` spúšťaný plánovačom každé 1–2 hodiny. |
+| `migrate` | Spustite raz pred štartom novej verzie. |
+
+Naraz beží iba jedna synchronizácia (advisory lock v PostgreSQL); prekrývajúci sa štart hneď skončí bez akejkoľvek
+zmeny.
+
+<Tabs>
+  <Tab title="Kubernetes">
+    `Deployment` pre `serve` a `CronJob` (rozvrh `0 * * * *`, `concurrencyPolicy: Forbid`) so `sync`. `migrate`
+    spustite ako `Job` alebo ako úvodný krok vydania.
+  </Tab>
+  <Tab title="AWS ECS / Fargate">
+    Služba pre `serve` (stačí 0,25 vCPU / 0,5 GB) a úloha plánovaná cez EventBridge pre `sync` (512 MB).
+  </Tab>
+  <Tab title="Google Cloud Run">
+    Služba Cloud Run pre `serve` a úloha Cloud Run pre `sync`, spúšťaná cez Cloud Scheduler.
+  </Tab>
+  <Tab title="Fly.io">
+    Stále bežiaci stroj pre `serve`; `sync --every 1h` na druhom stroji alebo na plánovanom stroji.
+  </Tab>
+  <Tab title="Virtuálny server">
+    Celý compose tak, ako je, alebo binárny súbor so systemd: služba pre `serve` a časovač pre `sync`.
+  </Tab>
+</Tabs>
+
+## Požiadavky na platformu
+
+- `sync` potrebuje zapisovateľný pracovný priečinok (`REGISTER_WORK_DIR`, asi 1 GB pri prvom behu) a **priame
+  spojenie s databázou**, nie transakčný pooler: drží advisory lock a používa COPY.
+- `serve` môže používať transakčný pooler, napríklad PgBouncer.
+- Odchádzajúce HTTPS na úložisko RPO a na `report.financnasprava.sk`.
+- Ak databáza povoľuje spojenia len z pevných IP adries, `sync` a `serve` potrebujú statickú odchádzajúcu IP.

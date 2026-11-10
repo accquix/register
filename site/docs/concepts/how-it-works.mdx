@@ -1,0 +1,63 @@
+---
+title: How it works
+description: The sources, the sync that mirrors them, the search layer, and the API that serves them.
+---
+
+Accquix Register is one Go binary with four modes: `migrate` applies the schema, `sync` mirrors the sources,
+`serve` answers the API, `openapi` prints the API contract. `sync` and `serve` run independently, so a heavy import
+never takes CPU from API requests.
+
+## Sources
+
+| Source | Publisher | What it gives | How it is read |
+| --- | --- | --- | --- |
+| **RPO**, the Register of Legal Entities | Ministry of the Interior | IČO, name, legal form, address, establishment and termination, the source register entry | A monthly snapshot (23 files, about 940 MB) and daily change files, from a public bucket |
+| **ds_dsrdp** | Financial Administration | DIČ | A daily ZIP export |
+| **ds_dphs** | Financial Administration | IČ DPH, VAT paragraph and dates | A daily ZIP export |
+| **ds_iz_ran** | Financial Administration | Reliability index | A ZIP export, refreshed irregularly |
+| **ds_dphz**, **ds_dphv** | Financial Administration | The list of VAT payers with grounds for cancellation, and removals from it | Daily ZIP exports |
+| **ds_dpho** | Financial Administration | The special VAT scheme | A daily ZIP export |
+
+Never ingested: the Financial Administration IBAN lists (their licence forbids commercial use), and VIES (its terms
+forbid mirroring). The Register of Financial Statements (RÚZ) is not part of v1.
+
+## The sync
+
+A sync pass looks at every source and does what is due. It is safe to run often: with nothing new it costs a few
+requests and about two seconds.
+
+<Steps>
+  <Step title="Bootstrap (first run)">
+    Waits until the newest RPO snapshot is complete, downloads its parts in parallel, applies them, applies the
+    daily files after it, builds the search layer, and loads the six Financial Administration lists. The API answers
+    `503 bootstrapping` until all of this is published.
+  </Step>
+  <Step title="Daily">
+    Applies the next RPO daily file, one day at a time. A missing day is never skipped: the state becomes
+    `gap_wait` until the file arrives or a newer snapshot heals the gap. Each list is fetched with its ETag; an
+    unchanged list costs one `304` response.
+  </Step>
+  <Step title="Monthly reconcile">
+    A new RPO snapshot is merged under an order guard, so it never overwrites a later daily file. Records it no
+    longer contains are marked absent, within a threshold.
+  </Step>
+</Steps>
+
+Every file is applied as **one database transaction** with a checkpoint. The process can be killed at any moment;
+the next pass redoes only the unfinished file, and re-applying a file writes nothing. Only one sync runs at a time.
+
+**Validation stops bad data.** A file that breaks a threshold (an oversized daily file, a list that shrank too much,
+a parse error, an older list date) is not applied. The previous data stays served, and the source becomes
+`blocked` with a diagnostic until an operator looks at it. See [Operations](/self-hosting/operations).
+
+## The search layer
+
+After each file, the sync refreshes the search rows of the subjects that file touched: every official name of each
+active subject, its words, and a dictionary of all words with their counts. Search reads only these narrow tables,
+which is why it stays fast on a small database. See [Search](/concepts/search).
+
+## The API
+
+`serve` answers five endpoints: search, lookup, batch lookup, sources and capabilities. Every answer carries the
+attribution the licences require. Every lookup section says where it comes from, how fresh it is, and whether the
+source actually has no row or the register simply does not know. See [Freshness and certainty](/concepts/freshness).

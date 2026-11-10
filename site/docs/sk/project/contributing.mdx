@@ -1,0 +1,62 @@
+---
+title: Ako prispieť
+description: Ako zostaviť, otestovať a navrhnúť zmeny, a pravidlá, ktoré udržia projekt správny.
+---
+
+Accquix Register sa vyvíja otvorene na [GitHube](https://github.com/accquix/register).
+
+## Základné pravidlá
+
+- **Len kód, nikdy dáta.** Testy používajú syntetické dáta: vymyslené mená, IČO v rozsahu `9990xxxx` a DIČ v rozsahu
+  `20999xxxxx`, ktoré v registroch neexistujú.
+- **Najprv si prečítajte rozhodnutia.** `docs/decisions.md` je záväzný; zmenu navrhnite v issue, nie obídením v kóde.
+  Otvorené otázky sú v `docs/open-questions.md`.
+- **Identifikátory sú presné, neaktuálne zrkadlo nikdy nepovie „nenájdené“ a logy neobsahujú dopyty ani
+  identifikátory.**
+
+## Vývoj s pomocou AI
+
+Veľkú časť projektu píšu AI agenti pod vedením a kontrolou správcov. Hovoríme to otvorene. Príspevky vytvorené s
+pomocou AI sú vítané za rovnakých pravidiel: za to, čo odovzdáte, zodpovedáte vy, musí to prejsť testami a musíte to
+vedieť vysvetliť.
+
+## Zostavenie a testy
+
+Potrebujete Go 1.27+ a Docker.
+
+```sh
+docker run -d --name register-test-pg -p 5432:5432 -e POSTGRES_PASSWORD=test postgres:18
+export REGISTER_TEST_DATABASE_URL="postgres://postgres:test@localhost:5432/postgres?sslmode=disable"
+go test ./...
+```
+
+Pred pull requestom:
+
+```sh
+gofmt -l .                                                   # nesmie nič vypísať
+go vet ./...
+golangci-lint run ./...
+go run ./cmd/accquix-register openapi > api/openapi.yaml     # keď sa zmení API
+```
+
+## Táto dokumentácia
+
+Web je v priečinku `site/` a zostavuje ho [Blume](https://useblume.dev). API referencia sa generuje z
+`api/openapi.yaml`, takže sa nemôže rozísť s kódom.
+
+```sh
+cd site && npm install && npm run dev
+```
+
+Anglické stránky sú v `site/docs/`, slovenské v `site/docs/sk/` s rovnakými názvami súborov.
+
+## Commity
+
+Každý commit podpíšte ([DCO](https://developercertificate.org/), bez CLA) a používajte
+[Conventional Commits](https://www.conventionalcommits.org/):
+
+```sh
+git commit -s -m "fix: …"
+```
+
+Bezpečnostné problémy hláste súkromne, ako uvádza `SECURITY.md`.

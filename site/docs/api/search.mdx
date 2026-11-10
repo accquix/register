@@ -1,0 +1,78 @@
+---
+title: Search
+description: GET /v1/search for autocomplete by name or identifier, and the explicit fuzzy mode.
+---
+
+```http
+GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `q` | required | A name or an identifier, 1–200 characters. |
+| `mode` | `default` | `fuzzy` corrects typos; it is explicit, rate-limited and may be disabled. |
+| `limit` | `10` | At most 20. |
+
+<Tabs>
+  <Tab title="Name">
+    ```sh
+    curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?q=rybka%20zlata"
+    ```
+    ```json
+    {
+      "mode": "default",
+      "results": [
+        { "ico": "99900001", "name": "Zlatá Rybka, s.r.o.", "municipality": "Fiktívne Mesto", "kind": "legal_person", "active": true },
+        { "ico": "99900002", "name": "Strieborná Rybka, a.s.", "municipality": "Fiktívne Mesto", "kind": "legal_person", "active": true }
+      ],
+      "dataAsOf": "2026-11-10",
+      "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
+    }
+    ```
+  </Tab>
+  <Tab title="Identifier">
+    ```sh
+    curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?q=SK2099900100"
+    ```
+    An IČO, DIČ or IČ DPH is matched exactly. A VAT group's IČ DPH returns every member with an IČO. A
+    terminated subject is returned too, with `active: false`.
+  </Tab>
+  <Tab title="Fuzzy">
+    ```sh
+    curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?mode=fuzzy&q=zlta%20rybka"
+    ```
+    ```json
+    {
+      "mode": "fuzzy",
+      "results": [
+        { "ico": "99900001", "name": "Zlatá Rybka, s.r.o.", "kind": "legal_person", "active": true, "typos": 1 }
+      ],
+      "corrections": ["zlta→zlata"],
+      "attribution": ["…"]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## The result card
+
+| Field | Meaning |
+| --- | --- |
+| `ico` | The subject's IČO (absent for a record without one). |
+| `name` | The display name, with diacritics and legal form. |
+| `matchedName` | The official name that matched, when it is not the display name (a sole trader's other name). |
+| `municipality` | Municipality of the seat or place of business. |
+| `kind` | `legal_person`, `sole_trader`, `public_body` or `other`. |
+| `active` | `false` only for a terminated subject found by identifier. |
+| `typos` | Fuzzy only: corrections needed. |
+
+Search proposes; it does not resolve. When the user picks a card, call
+[`GET /v1/lookup/{ico}`](/api/lookup) for the full record.
+
+## Good client behaviour
+
+- **Debounce typing** by about 120–250 ms. Without it, every keystroke is a request.
+- **Never auto-select the first result.** Two subjects can share a name.
+- **Offer fuzzy only as an explicit action**, for example "Nothing found. Search with typos?", and only when
+  [`/v1/capabilities`](/reference) says it is enabled.
+- On `429`, wait the number of seconds in `Retry-After`.

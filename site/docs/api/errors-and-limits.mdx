@@ -1,0 +1,57 @@
+---
+title: Errors and limits
+description: Problem documents, error codes, rate limits and timeouts.
+---
+
+## Problem documents
+
+Errors are RFC 9457 `application/problem+json` documents with a stable `code`:
+
+```json
+{
+  "title": "Service Unavailable",
+  "status": 503,
+  "detail": "not found, but these sources are not fresh: rpo",
+  "code": "unavailable",
+  "reason": "source_stale"
+}
+```
+
+| `code` | Status | Meaning |
+| --- | --- | --- |
+| `invalid_request` | 400, 422 | A parameter is missing or out of range; `errors` lists the details. |
+| `invalid_identifier` | 400 | The lookup id is not an IČO, DIČ or IČ DPH. |
+| `fuzzy_disabled` | 400 | `mode=fuzzy` on an instance where it is off. |
+| `unauthorized` | 401 | No key, or an unknown key. |
+| `forbidden` | 403 | A natural person by DIČ on an instance with anonymous access. |
+| `not_found` | 404 | Not found, and every consulted source is fresh. |
+| `rate_limited` | 429 | Too many requests; see `Retry-After`. |
+| `unavailable` | 503 | See `reason`: `bootstrapping`, `source_stale`, `timeout` or `database`. |
+
+Treat `503` as "unknown": retry later, and never as "not found".
+
+## Rate limits
+
+Each caller (a key, or a client IP in anonymous mode) has a token bucket, per instance:
+
+| Limit | Default | Variable |
+| --- | --- | --- |
+| Requests | 20 per second, burst 40 | `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` |
+| Fuzzy searches | 1 per 5 s, burst 2 | `REGISTER_FUZZY_EVERY` |
+| Fuzzy searches running at once | 1 per instance | `REGISTER_FUZZY_CONCURRENCY` |
+
+Over a limit, the answer is `429` with `Retry-After` in seconds. Nothing is queued.
+
+:::note
+Limits are per instance. With several `serve` replicas, the total is the per-replica value times the number of
+replicas: set conservative values for fuzzy search.
+:::
+
+## Timeouts
+
+| Query | Default | Variable |
+| --- | --- | --- |
+| Default search and lookup | 3 s | `REGISTER_QUERY_TIMEOUT` |
+| Fuzzy search | 2 s | `REGISTER_FUZZY_TIMEOUT` |
+
+A query over its timeout answers `503` with reason `timeout`.

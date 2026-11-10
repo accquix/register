@@ -1,0 +1,53 @@
+---
+title: Sledovanie zmien
+description: Pomocou POST /v1/lookup:batch a verzií častí denne zistíte, ktorí vaši obchodní partneri sa zmenili.
+---
+
+Register nedrží históriu a neponúka kanál zmien: kanál by umožnil ľubovoľnému kľúču stiahnuť celú databázu. Klient si
+namiesto toho uloží verziu každej časti a pýta sa na aktuálne verzie subjektov, ktoré ho zaujímajú.
+
+## Uložte si verzie
+
+Keď ukladáte obchodného partnera, uložte si z overenia `source.version` každej časti:
+
+```json
+{ "ico": "99900001", "identity": "4f2a…", "tax": "9c01…", "vat": "77be…", "risk": "1d3e…" }
+```
+
+## Pýtajte sa na aktuálne verzie
+
+```sh
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"ids": ["99900001", "99900004", "12"], "fields": "versions"}' \
+  http://localhost:8080/v1/lookup:batch
+```
+
+```json
+{
+  "items": [
+    {
+      "id": "99900001",
+      "status": 200,
+      "versions": [
+        { "identity": { "state": "present", "version": "4f2a…" }, "tax": { "state": "present", "version": "9c01…" },
+          "vat": { "state": "present", "version": "81aa…" }, "risk": { "state": "present", "version": "1d3e…" } }
+      ]
+    },
+    { "id": "99900004", "status": 200, "versions": ["…"] },
+    { "id": "12", "status": 400, "code": "invalid_identifier" }
+  ],
+  "attribution": ["…"]
+}
+```
+
+V jednej požiadavke najviac 100 identifikátorov. Každá položka nesie stav, ktorý by rovnaké id dostalo z
+`/v1/lookup/{id}`. Tu sa zmenila verzia DPH pri `99900001`: overte ho znova a ukážte používateľovi, čo sa zmenilo.
+
+## Poznámky
+
+- Verzie sú odtlačky obsahu. Opätovné zostavenie registra zo zdrojov dá rovnaké verzie, takže vašim používateľom
+  nezahltí falošné zmeny.
+- `fields: "all"` (predvolené) vráti celé overenia namiesto verzií.
+- Kontrolu spúšťajte raz denne: zdroje sa menia najviac denne.
+- Časť, ktorá prešla do `unknown` (neaktuálny zdroj), sa nezmenila. Kým o zmene niekomu poviete, počkajte na aktuálne
+  dáta.

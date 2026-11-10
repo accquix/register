@@ -1,0 +1,78 @@
+---
+title: Vyhľadávanie
+description: GET /v1/search na našepkávanie podľa názvu alebo identifikátora a explicitný režim opravy preklepov.
+---
+
+```http
+GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
+```
+
+| Parameter | Predvolené | Význam |
+| --- | --- | --- |
+| `q` | povinný | Názov alebo identifikátor, 1–200 znakov. |
+| `mode` | `default` | `fuzzy` opravuje preklepy; je explicitný, limitovaný a môže byť vypnutý. |
+| `limit` | `10` | Najviac 20. |
+
+<Tabs>
+  <Tab title="Názov">
+    ```sh
+    curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?q=rybka%20zlata"
+    ```
+    ```json
+    {
+      "mode": "default",
+      "results": [
+        { "ico": "99900001", "name": "Zlatá Rybka, s.r.o.", "municipality": "Fiktívne Mesto", "kind": "legal_person", "active": true },
+        { "ico": "99900002", "name": "Strieborná Rybka, a.s.", "municipality": "Fiktívne Mesto", "kind": "legal_person", "active": true }
+      ],
+      "dataAsOf": "2026-11-10",
+      "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
+    }
+    ```
+  </Tab>
+  <Tab title="Identifikátor">
+    ```sh
+    curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?q=SK2099900100"
+    ```
+    IČO, DIČ alebo IČ DPH sa hľadá presne. IČ DPH skupiny vráti všetkých jej členov s IČO. Vráti sa aj zaniknutý
+    subjekt, s `active: false`.
+  </Tab>
+  <Tab title="S preklepmi">
+    ```sh
+    curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?mode=fuzzy&q=zlta%20rybka"
+    ```
+    ```json
+    {
+      "mode": "fuzzy",
+      "results": [
+        { "ico": "99900001", "name": "Zlatá Rybka, s.r.o.", "kind": "legal_person", "active": true, "typos": 1 }
+      ],
+      "corrections": ["zlta→zlata"],
+      "attribution": ["…"]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Karta výsledku
+
+| Pole | Význam |
+| --- | --- |
+| `ico` | IČO subjektu (chýba pri zázname bez IČO). |
+| `name` | Zobrazovaný názov s diakritikou a právnou formou. |
+| `matchedName` | Oficiálny názov, ktorý sa zhodoval, ak nie je zobrazovaným názvom (iný názov živnostníka). |
+| `municipality` | Obec sídla alebo miesta podnikania. |
+| `kind` | `legal_person`, `sole_trader`, `public_body` alebo `other`. |
+| `active` | `false` iba pri zaniknutom subjekte nájdenom podľa identifikátora. |
+| `typos` | Len pri preklepoch: počet opráv. |
+
+Vyhľadávanie navrhuje, nerozhoduje. Keď používateľ vyberie kartu, zavolajte
+[`GET /v1/lookup/{ico}`](/sk/api/lookup) a získajte celý záznam.
+
+## Správne správanie klienta
+
+- **Oneskorte dopyty počas písania** približne o 120–250 ms. Inak je každé stlačenie klávesu požiadavka.
+- **Nikdy automaticky nevyberajte prvý výsledok.** Dva subjekty môžu mať rovnaký názov.
+- **Približné vyhľadávanie ponúknite len ako výslovnú akciu**, napríklad „Nič sa nenašlo. Hľadať s preklepmi?“, a
+  len ak [`/v1/capabilities`](/sk/reference) uvádza, že je zapnuté.
+- Pri `429` počkajte počet sekúnd z hlavičky `Retry-After`.

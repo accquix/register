@@ -1,0 +1,57 @@
+---
+title: Chyby a limity
+description: Problémové dokumenty, kódy chýb, limity požiadaviek a časové limity.
+---
+
+## Problémové dokumenty
+
+Chyby sú dokumenty RFC 9457 `application/problem+json` so stálym kódom `code`:
+
+```json
+{
+  "title": "Service Unavailable",
+  "status": 503,
+  "detail": "not found, but these sources are not fresh: rpo",
+  "code": "unavailable",
+  "reason": "source_stale"
+}
+```
+
+| `code` | Stav | Význam |
+| --- | --- | --- |
+| `invalid_request` | 400, 422 | Parameter chýba alebo je mimo rozsahu; `errors` uvádza podrobnosti. |
+| `invalid_identifier` | 400 | Id overenia nie je IČO, DIČ ani IČ DPH. |
+| `fuzzy_disabled` | 400 | `mode=fuzzy` na inštancii, kde je vypnuté. |
+| `unauthorized` | 401 | Chýba kľúč alebo je neznámy. |
+| `forbidden` | 403 | Fyzická osoba podľa DIČ na inštancii s anonymným prístupom. |
+| `not_found` | 404 | Nenájdené a všetky použité zdroje sú aktuálne. |
+| `rate_limited` | 429 | Príliš veľa požiadaviek; pozrite `Retry-After`. |
+| `unavailable` | 503 | Pozrite `reason`: `bootstrapping`, `source_stale`, `timeout` alebo `database`. |
+
+`503` berte ako „neznáme“: skúste to neskôr a nikdy to neberte ako „nenájdené“.
+
+## Limity požiadaviek
+
+Každý klient (kľúč, alebo IP adresa v anonymnom režime) má vlastný limit typu token bucket, na každú inštanciu:
+
+| Limit | Predvolené | Premenná |
+| --- | --- | --- |
+| Požiadavky | 20 za sekundu, nárazovo 40 | `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` |
+| Približné vyhľadávania | 1 za 5 s, nárazovo 2 | `REGISTER_FUZZY_EVERY` |
+| Súbežné približné vyhľadávania | 1 na inštanciu | `REGISTER_FUZZY_CONCURRENCY` |
+
+Nad limitom je odpoveď `429` s `Retry-After` v sekundách. Nič sa nezaraďuje do fronty.
+
+:::note
+Limity platia pre každú inštanciu zvlášť. Pri viacerých replikách `serve` je celkový limit hodnota na repliku krát
+počet replík: pre približné vyhľadávanie nastavte opatrné hodnoty.
+:::
+
+## Časové limity
+
+| Dopyt | Predvolené | Premenná |
+| --- | --- | --- |
+| Predvolené vyhľadávanie a overenie | 3 s | `REGISTER_QUERY_TIMEOUT` |
+| Približné vyhľadávanie | 2 s | `REGISTER_FUZZY_TIMEOUT` |
+
+Dopyt nad časovým limitom vráti `503` s dôvodom `timeout`.

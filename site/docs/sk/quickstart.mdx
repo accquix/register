@@ -1,0 +1,78 @@
+---
+title: Rýchly štart
+description: Spustite Accquix Register cez docker compose, počkajte na prvú synchronizáciu a pošlite prvé vyhľadávanie a overenie.
+---
+
+Potrebujete Docker s doplnkom compose, približne 10 GB voľného miesta a odchádzajúce HTTPS spojenie. Prvá
+synchronizácia stiahne asi 1 GB a trvá 10–20 minút, väčšinu času zaberie sťahovanie.
+
+<Steps>
+  <Step title="Stiahnite kód">
+    ```sh
+    git clone https://github.com/accquix/register
+    cd register/deploy/compose
+    ```
+  </Step>
+  <Step title="Vytvorte tajomstvá">
+    ```sh
+    ./make-secrets.sh
+    ```
+    Skript zapíše náhodné heslo k databáze a jeden kľúč API do priečinka `secrets/`. **Kľúč API sa zobrazí iba
+    raz:** uložte si ho hneď. Uchováva sa len jeho odtlačok SHA-256.
+  </Step>
+  <Step title="Spustite služby">
+    ```sh
+    docker compose up -d
+    ```
+    Compose spustí PostgreSQL 18, aplikuje schému (`migrate`) a potom spustí API (`serve`) a hodinovú
+    synchronizáciu (`sync --every 1h`).
+  </Step>
+  <Step title="Počkajte na prvú synchronizáciu">
+    ```sh
+    docker compose logs -f sync
+    curl -s localhost:8080/readyz
+    ```
+    Kým nie sú zverejnené všetky zdroje, API odpovedá `503` s dôvodom `bootstrapping`. Keď synchronizácia zapíše
+    `fs list applied` pre posledný zoznam, `/readyz` odpovie `ready`.
+  </Step>
+  <Step title="Vyhľadajte a overte">
+    ```sh
+    export KEY=<váš kľúč>
+    curl -s -H "Authorization: Bearer $KEY" "localhost:8080/v1/search?q=zlata%20ryb"
+    curl -s -H "Authorization: Bearer $KEY" "localhost:8080/v1/lookup/99900001"
+    ```
+  </Step>
+</Steps>
+
+Vyhľadávanie vráti kandidátov, overenie podľa identifikátora vráti celý subjekt:
+
+```json title="GET /v1/search?q=zlata ryb"
+{
+  "mode": "default",
+  "results": [
+    {
+      "ico": "99900001",
+      "name": "Zlatá Rybka, s.r.o.",
+      "municipality": "Fiktívne Mesto",
+      "kind": "legal_person",
+      "active": true
+    }
+  ],
+  "dataAsOf": "2026-11-10",
+  "attribution": [
+    "Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0",
+    "Zdroj údajov: Finančná správa SR"
+  ]
+}
+```
+
+:::tip
+Príklady na tomto webe používajú vymyslené subjekty, napríklad „Zlatá Rybka, s.r.o.“ s IČO `99900001`. Vaša
+inštancia vracia skutočné údaje z registrov.
+:::
+
+## Ďalej
+
+- [Ako to funguje](/sk/concepts/how-it-works): čo robí synchronizácia a čo odpovede garantujú.
+- [Práca s API](/sk/api/search): vyhľadávanie, overenie a sledovanie zmien.
+- [Vlastná prevádzka](/sk/self-hosting/requirements): požiadavky, databázové roly, monitorovanie a aktualizácie.

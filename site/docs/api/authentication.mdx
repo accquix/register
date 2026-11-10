@@ -1,0 +1,39 @@
+---
+title: Authentication
+description: API keys, the explicit anonymous mode, and the public endpoints.
+---
+
+Every data endpoint needs an API key, sent as a Bearer token:
+
+```sh
+curl -H "Authorization: Bearer $KEY" "http://localhost:8080/v1/search?q=zlata"
+```
+
+## Keys
+
+The instance stores **only the SHA-256 hashes** of its keys, in `REGISTER_API_KEYS`, as `name:hash` pairs:
+
+```sh
+KEY=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+printf %s "$KEY" | sha256sum      # put "pro:<hash>" into REGISTER_API_KEYS
+```
+
+The key name appears in the access log and is the unit of rate limiting. Give each consumer its own key. A wrong
+key is always rejected with `401`, even when anonymous access is on.
+
+## Anonymous mode
+
+Without keys, `serve` refuses to start. To serve without keys, set `REGISTER_ALLOW_ANONYMOUS=true` explicitly. Then:
+
+- requests without an `Authorization` header are allowed and rate-limited per client IP;
+- the lookup of natural persons without an IČO by DIČ is unavailable (`403`), to protect their data;
+- `/v1/capabilities` reports `anonymous: true`.
+
+## Public endpoints
+
+These answer without a key: `/livez`, `/readyz`, `/openapi.json` and `/openapi.yaml`.
+
+## What is logged
+
+The access log records the route, the status, the duration and the key name. It never records the search query,
+the identifier in the path or any data.

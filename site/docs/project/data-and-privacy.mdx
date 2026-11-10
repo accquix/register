@@ -1,0 +1,41 @@
+---
+title: Data and privacy
+description: The licences of the data, the attribution they require, and your duties as the controller of your copy.
+---
+
+## No data in this project
+
+The repository contains code only: no register records, no dumps, no real names or identifiers in tests. Every
+instance downloads the data from the official sources itself.
+
+## Licences and attribution
+
+| Source | Licence | Attribution |
+| --- | --- | --- |
+| Register of Legal Entities (RPO), Ministry of the Interior | CC BY 4.0 | "Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0" |
+| Lists of the Financial Administration | CC0 per the exports page; the portal terms ask for attribution | "Zdroj údajov: Finančná správa SR" |
+
+Every API response carries these texts in `attribution`. If you show the data to others, show them too.
+
+**Never ingested:** the Financial Administration IBAN lists (`ds_dph_iban`, `ds_dph_oud`, CC BY-NC-ND: no commercial
+use), and VIES (its terms forbid mirroring).
+
+## You are the controller
+
+About 80 % of RPO records are natural persons, mostly sole traders. Their business name and place of business are
+personal data, even though the law publishes them. When you run an instance, you are the controller of that copy:
+
+- decide and document your purpose and legal basis before offering name search to anyone;
+- keep the API behind keys (the default);
+- handle objections with `accquix-register suppress` (see [Operations](/self-hosting/operations));
+- tell your users where the data comes from and as of when.
+
+## What the register stores
+
+| Stored and returned | Never stored |
+| --- | --- |
+| Business name, identifiers, place of business or seat, legal form, register entry, dates, status | Residence when it differs from the place of business, birth data, statutory bodies, stakeholders, representatives |
+
+Natural persons without an IČO, known only by DIČ, are never in name search; a lookup by their exact DIČ returns only
+the DIČ, name and municipality, and only to authenticated callers. Logs contain no queries and no identifiers. The
+software sends nothing anywhere except requests to the official sources: no telemetry.

@@ -1,0 +1,67 @@
+---
+title: Prevádzka
+description: Monitorovanie, zablokované zdroje, námietky, aktualizácie a opätovné zostavenie.
+---
+
+## Monitorovanie
+
+| Kontrola | Čo sledovať |
+| --- | --- |
+| `GET /livez` | Proces beží. |
+| `GET /readyz` | `503`, kým nie sú prvýkrát zverejnené všetky zdroje alebo keď je databáza nedostupná. |
+| `GET /v1/sources` | Pri každom zdroji: `state`, `publishedAsOf`, `stale`, `diagnostic`. |
+
+Upozornenie nastavte, keď:
+
+- je niektorý zdroj **`blocked`**: validácia zastavila aktualizáciu;
+- `rpo` zostane v stave **`gap_wait`** dlhšie ako deň (chýba denný súbor);
+- je niektorý zdroj **`stale`** (RPO starší ako 3 dni, zoznam starší ako 2 dni, index spoľahlivosti starší ako 14).
+
+## Zablokovaný zdroj
+
+Súbor, ktorý prekročí prah, sa neaplikuje: predchádzajúce dáta sa ďalej poskytujú a zdroj je `blocked` s
+diagnostikou, napríklad `daily file has 25 000 records, more than 20 000`. Nič iné sa nezastaví: ostatné zdroje sa
+ďalej aktualizujú.
+
+<Steps>
+  <Step title="Prečítajte diagnostiku">
+    `GET /v1/sources` alebo log `sync`.
+  </Step>
+  <Step title="Rozhodnite">
+    Ak je súbor chybný, počkajte: úrad ho zvyčajne zverejní znova. Ak je zmena skutočná (zoznam sa naozaj zmenšil),
+    zvýšte prah na jeden beh: `REGISTER_RPO_DAILY_MAX_RECORDS`, `REGISTER_FS_MAX_DROP`, `REGISTER_ABSENCE_MAX_RATIO`.
+  </Step>
+  <Step title="Odblokujte">
+    ```sh
+    accquix-register sync --unblock --source rpo          # alebo --source fs:ds_dphs
+    accquix-register sync                                   # ďalší prechod súbor skúsi znova
+    ```
+  </Step>
+</Steps>
+
+## Námietky
+
+Fyzické osoby, najčastejšie živnostníci, môžu namietať proti zobrazovaniu vo vyhľadávaní podľa názvu. Vyraďte
+subjekt z vyhľadávania; presné overenie podľa identifikátora funguje ďalej:
+
+```sh
+accquix-register suppress --subject 99900004 --reason "tiket 123"
+accquix-register suppress --subject 99900004 --undo
+```
+
+Vyradenie sa drží podľa IČO, takže aj nový záznam tej istej osoby v RPO zostane vyradený. Do `--reason`
+nezapisujte osobné údaje.
+
+## Aktualizácie
+
+1. Stiahnite alebo zostavte nový obraz.
+2. Spustite `accquix-register migrate`.
+3. Reštartujte `serve` a `sync`.
+
+## Opätovné zostavenie od začiatku
+
+```sh
+docker compose down -v && docker compose up -d
+```
+
+Ďalšia synchronizácia všetko znova stiahne a zverejní približne za 15 minút. Verzie zostanú rovnaké.

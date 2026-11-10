@@ -1,0 +1,37 @@
+---
+title: Requirements
+description: Hardware, database and network requirements, measured on the real data.
+---
+
+Measured on the data of 10 November 2026: 2.29 million RPO records, 1.02 million active subjects, the six
+Financial Administration lists.
+
+| Resource | Minimum | Comfortable |
+| --- | --- | --- |
+| PostgreSQL | 16, 17 or 18, with the `pg_trgm` extension | 18 |
+| Database disk | 5 GB (about 2.3 GB of data, about 0.75 GB WAL during loads, headroom) | 10 GB |
+| Database RAM | 1 GB | 2–4 GB |
+| Database CPU | 1/8 vCPU (about 30 default searches a second when saturated) | 1/4 vCPU or more (75–140 a second) |
+| Register container | 256 MB RAM; the sync peaks at about 30 MB | 512 MB |
+| Work volume for `sync` | 1 GB during the first run; files are deleted once applied | — |
+| Outbound HTTPS | The RPO bucket (Oracle Cloud, Frankfurt) and `report.financnasprava.sk` | — |
+
+**Any PostgreSQL works:** plain PostgreSQL, Neon, PlanetScale Postgres, Supabase, RDS. Only `pg_trgm` is needed; no
+provider-specific extension.
+
+## How long the first run takes
+
+| Step | Measured |
+| --- | --- |
+| Download the RPO snapshot (about 940 MB, 6 parallel streams) | about 9 min |
+| Apply the snapshot (2.29 million records) | 90 s |
+| Daily files after the snapshot | under 1 s |
+| Build the search layer and publish | 32 s |
+| The six Financial Administration lists | 60 s |
+| **Until `/readyz` answers `ready`** | **about 12–13 min** |
+
+Most of the time is the download. On a very small database tier, expect 20–30 minutes (an estimate). An interrupted
+first run resumes: applied parts are not downloaded again, and a partial download continues.
+
+After that, an hourly pass with nothing new takes one to two seconds; a new daily file is applied in under a
+second.

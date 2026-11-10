@@ -1,0 +1,36 @@
+---
+title: Požiadavky
+description: Požiadavky na hardvér, databázu a sieť, namerané na reálnych dátach.
+---
+
+Namerané na dátach z 10. novembra 2026: 2,29 milióna záznamov RPO, 1,02 milióna aktívnych subjektov a šesť zoznamov
+Finančnej správy.
+
+| Zdroj | Minimum | Pohodlne |
+| --- | --- | --- |
+| PostgreSQL | 16, 17 alebo 18 s rozšírením `pg_trgm` | 18 |
+| Disk databázy | 5 GB (asi 2,3 GB dát, asi 0,75 GB WAL počas načítania, rezerva) | 10 GB |
+| RAM databázy | 1 GB | 2–4 GB |
+| CPU databázy | 1/8 vCPU (asi 30 predvolených vyhľadávaní za sekundu pri plnom vyťažení) | 1/4 vCPU a viac (75–140 za sekundu) |
+| Kontajner registra | 256 MB RAM; synchronizácia potrebuje najviac asi 30 MB | 512 MB |
+| Pracovný zväzok pre `sync` | 1 GB počas prvého behu; súbory sa po aplikovaní mažú | — |
+| Odchádzajúce HTTPS | Úložisko RPO (Oracle Cloud, Frankfurt) a `report.financnasprava.sk` | — |
+
+**Funguje s akýmkoľvek PostgreSQL:** obyčajný PostgreSQL, Neon, PlanetScale Postgres, Supabase, RDS. Potrebné je len
+`pg_trgm`; žiadne rozšírenie konkrétneho poskytovateľa.
+
+## Ako dlho trvá prvý beh
+
+| Krok | Namerané |
+| --- | --- |
+| Stiahnutie snapshotu RPO (asi 940 MB, 6 paralelných prúdov) | asi 9 min |
+| Aplikovanie snapshotu (2,29 milióna záznamov) | 90 s |
+| Denné súbory po snapshote | menej ako 1 s |
+| Zostavenie vyhľadávacej vrstvy a zverejnenie | 32 s |
+| Šesť zoznamov Finančnej správy | 60 s |
+| **Kým `/readyz` neodpovie `ready`** | **asi 12–13 min** |
+
+Väčšinu času zaberie sťahovanie. Na veľmi malej databáze rátajte s 20–30 minútami (odhad). Prerušený prvý beh
+pokračuje: už aplikované časti sa nesťahujú znova a čiastočne stiahnutý súbor sa dotiahne.
+
+Potom hodinový prechod bez noviniek trvá jednu až dve sekundy; nový denný súbor sa aplikuje za menej ako sekundu.

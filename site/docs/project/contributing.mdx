@@ -1,0 +1,61 @@
+---
+title: Contributing
+description: How to build, test and propose changes, with the rules that keep the project correct.
+---
+
+Accquix Register is developed in the open on [GitHub](https://github.com/accquix/register).
+
+## Ground rules
+
+- **Code only, never data.** Tests use synthetic data: fictional names, IČOs in the `9990xxxx` range and DIČs in the
+  `20999xxxxx` range, which do not exist in the registers.
+- **Read the decisions first.** `docs/decisions.md` binds; propose a change in an issue rather than working around
+  it. Open questions are in `docs/open-questions.md`.
+- **Identifiers are exact, a stale mirror never says "not found", and logs carry no queries or identifiers.**
+
+## AI-assisted development
+
+Much of this project is written with AI coding agents, reviewed and directed by the maintainers. We say so openly.
+Contributions made with AI assistance are welcome under the same rules: you are responsible for what you submit, it
+must pass the tests, and you must be able to explain it.
+
+## Build and test
+
+You need Go 1.27+ and Docker.
+
+```sh
+docker run -d --name register-test-pg -p 5432:5432 -e POSTGRES_PASSWORD=test postgres:18
+export REGISTER_TEST_DATABASE_URL="postgres://postgres:test@localhost:5432/postgres?sslmode=disable"
+go test ./...
+```
+
+Before a pull request:
+
+```sh
+gofmt -l .                                                   # must print nothing
+go vet ./...
+golangci-lint run ./...
+go run ./cmd/accquix-register openapi > api/openapi.yaml     # when the API changes
+```
+
+## This documentation
+
+The site lives in `site/` and is built with [Blume](https://useblume.dev). The API reference is generated from
+`api/openapi.yaml`, so it cannot drift from the code.
+
+```sh
+cd site && npm install && npm run dev
+```
+
+English pages are in `site/docs/`, Slovak pages in `site/docs/sk/` with the same file names.
+
+## Commits
+
+Sign off every commit ([DCO](https://developercertificate.org/), no CLA) and use
+[Conventional Commits](https://www.conventionalcommits.org/):
+
+```sh
+git commit -s -m "fix: …"
+```
+
+Report security issues privately, as described in `SECURITY.md`.
