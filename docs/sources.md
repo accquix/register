@@ -86,7 +86,7 @@ endpoints change without notice. The RPO move in June 2026 broke many integratio
 - **The files regenerate** around 01:36–01:52 UTC.
 - **Do not download the ZIPs in a loop.** Use a conditional GET with the stored ETag.
 
-## RÚZ
+## RÚZ (not in v1, decision D16; kept for v2)
 
 - **Listing:** `zmenene-od` (inclusive, day or timestamp), paged with `pokracovat-za-id` and
   `max-zaznamov` (at most 10 000), with an `existujeDalsieId` flag. `zostavajuce-id/...` returns the
@@ -103,12 +103,11 @@ endpoints change without notice. The RPO move in June 2026 broke many integratio
 | Dataset | Rows | Raw size |
 | --- | --- | --- |
 | RPO snapshot 2026-11-07 | about 2.28 M records (≈1.1 M active); about 80 % from the Trade Register (sole traders) | 951.7 MB gz → about 10 GB JSON |
-| RPO daily | about 3–4 k records a day | 50 KB – 2.3 MB gz |
+| RPO daily | 131–4 270 records a file, about 2 000 on average (measured, 43 files) | 50 KB – 2.3 MB gz |
 | `ds_dsrdp` (DIČ) | 1 423 049 (11 % without IČO) | 56.8 MB zip → 399 MB XML |
 | `ds_dphs` (VAT) | 319 173: §4 226 924, §7a 76 182, §5 9 437, §7 5 158, §4b 1 472 | 14.4 MB → 127 MB |
 | `ds_iz_ran` | 648 238 | 24.6 MB → 200 MB |
 | `ds_dphz` / `ds_dphv` / `ds_dpho` | 3 805 / 44 284 / 1 004 | small |
 | RÚZ | 1 935 750 entities | about 0.7 GB JSON |
 
-**Core database estimate: about 4–5 GB in PostgreSQL, indexes included.** This is unmeasured; the
-measurement spike settles it.
+**Measured core database (spike, 2026-11-10): 2.1 GB in PostgreSQL 18, indexes included** (RPO and the FS lists, no RÚZ). See [spike-results.md](spike-results.md).

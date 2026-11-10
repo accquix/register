@@ -6,19 +6,18 @@ Accquix Register is a free, open-source service that builds and maintains your o
 database of Slovak companies and sole traders from the official public registers, with no
 commercial API subscription and no vendor lock-in.
 
-> **Status: design phase.** No release yet. The design is in [docs/](docs/).
+> **Status: in development.** No release yet. The design is in [docs/](docs/).
 
 ## What it does
 
 - **Mirrors the official sources** into your PostgreSQL:
   - the Register of Legal Entities (RPO);
   - the Financial Administration lists: DIČ, IČ DPH and VAT paragraph, risk lists, reliability
-    index;
-  - the Register of Financial Statements (RÚZ).
+    index.
 - **Keeps the mirror current** with daily incremental updates, resumable after any crash.
 - **Serves a small HTTP API** (OpenAPI 3.1):
   - one smart search box: company or trader name, IČO, DIČ or IČ DPH. It ignores diacritics and
-    tolerates typos.
+    word order, matches the start of any word, and can optionally correct typos.
   - a lookup that returns the identity, the register entry, the tax and VAT status and the risk
     lists, each with its source and as-of date.
 - **Runs anywhere:** one Go binary and plain PostgreSQL (16–18, Neon, PlanetScale, Supabase, RDS…).

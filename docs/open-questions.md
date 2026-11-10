@@ -3,17 +3,15 @@
 Record new questions here. Never decide them in code. When a question is answered, move the answer
 to [decisions.md](decisions.md) with its date.
 
+OQ-1, 5–9, 11, 13–15 and 17–20 were answered on 2026-11-10 (D17–D30). OQ-2, 16 and 21 must be done
+before the first production use (D30); OQ-3, 4, 10 and 12 are deferred.
+
 | ID | Question | Proposal |
 | --- | --- | --- |
-| OQ-1 | **Start implementation.** It is held until the maintainers approve the design | — |
-| OQ-2 | **Measurement spike** before fixing hardware guidance and validation thresholds (see [measurement-spike.md](measurement-spike.md)) | Run it locally. **Time-sensitive:** the RPO bucket keeps files about 45 days. The 2026-10-03 snapshot will probably disappear around 2026-11-17, and it is the only chance to test snapshot → daily files → reconcile against the 2026-11-07 snapshot |
+| OQ-2 | **Measurement spike.** Done 2026-11-10, see [spike-results.md](spike-results.md). Open part: the full chain test (snapshot → daily → reconcile) was impossible because the 2026-10-03 snapshot was already gone | Repeat the chain test after the December snapshot (about 2026-12-05): bootstrap 11-07, apply the dailies, reconcile against the December snapshot |
 | OQ-3 | Ask the Ministry of Justice (servicedesk.mssr@justice.sk) about the licence and limits of the ORSR REST API, before using it beyond single on-demand lookups | Yes, before v2 |
 | OQ-4 | The new base URL of the RPO REST API under MV SR is undocumented. It is needed only for an on-demand refresh, because the bucket covers the mirror | Ask MV SR, or skip it |
-| OQ-5 | Leave `ds_dsrdp` rows without an IČO (private taxpayers who are not in RPO) out of name search, reachable by exact DIČ only? Sole traders stay searchable | Yes |
-| OQ-6 | Freshness thresholds that mark a section `stale` | RPO 3 days, FS 2 days, `ds_iz_ran` 14 days |
-| OQ-7 | Validation thresholds that block publication (row-count drop, absence ratio) | Set them from the spike's measurements |
-| OQ-8 | GIN or GiST for the trigram index, and the word-similarity threshold | Measure on real data |
-| OQ-9 | Batch version polling, or a `changes?since=` feed? A feed would let any API key enumerate the whole database | Batch polling in v1 |
 | OQ-10 | A live "check now" refresh through the FS Lists API (optional key) | v2 |
-| OQ-11 | Publish a TypeScript client package, or let consumers generate types from `openapi.yaml`? | Consumers generate their own (v1) |
 | OQ-12 | Copyright holder in NOTICE: "The Accquix Register Authors" for now. Switch to the company name once the company exists? | Yes |
+| OQ-16 | **Search relevance test set** (exact name first, shorter names first, typos, same names of different subjects) | Synthetic fixtures in the repo; real-data checks run locally only |
+| OQ-21 | **Capacity on a 1/8–1/4 vCPU database:** about 30 vs 75–140 default searches a second when saturated (Docker limits) | Confirm on the real tier with an open-loop test |
