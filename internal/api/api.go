@@ -301,8 +301,8 @@ func (s *Server) cards(ctx context.Context, hits []search.Hit) ([]Card, error) {
 	for i, h := range hits {
 		keys[i] = h.SKey
 	}
-	rows, err := s.pool.Query(ctx, `SELECT skey, coalesce(ico, ''), name, coalesce(municipality, ''), kind FROM search_name
-WHERE skey = ANY($1) AND is_primary`, keys)
+	rows, err := s.pool.Query(ctx, `SELECT n.skey, coalesce(n.ico, ''), n.name, coalesce(n.municipality, ''), n.kind FROM search_name n
+WHERE n.skey = ANY($1) AND n.is_primary AND `+search.NotSuppressed, keys)
 	if err != nil {
 		return nil, err
 	}

@@ -1,8 +1,10 @@
 # Accquix Register, reference self-hosted deployment.
-# See docs/self-hosting.md. Create the three secret files first (no default credentials):
-#   deploy/compose/secrets/postgres_password   the database password
-#   deploy/compose/secrets/database_url        postgres://register:<password>@postgres:5432/register?sslmode=disable
-#   deploy/compose/secrets/api_keys            name:sha256hex[,name2:sha256hex]
+# See docs/self-hosting.md. Create the secret files first with ./make-secrets.sh (no default
+# credentials). Each process gets its own database role and only its own secret:
+#   migrate  register_migrate  owns the schema            secrets/migrate_database_url
+#   sync     register_sync     reads and writes tables    secrets/sync_database_url
+#   serve    register_api      SELECT only                secrets/database_url, secrets/api_keys
+# The roles are created by initdb/10-roles.sh when the pgdata volume is first initialised.
 name: accquix-register
 
 x-register: &register
@@ -11,10 +13,6 @@ x-register: &register
     context: ../..
     args:
       VERSION: ${REGISTER_VERSION:-dev}
-  environment:
-    REGISTER_DATABASE_URL_FILE: /run/secrets/database_url
-    REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
-  secrets: [database_url]
   restart: unless-stopped
 
 services:
@@ -22,14 +20,14 @@ services:
     image: postgres:18
     environment:
       POSTGRES_DB: register
-      POSTGRES_USER: register
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets: [postgres_password]
+    secrets: [postgres_password, migrate_password, sync_password, api_password]
     volumes:
       - pgdata:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     shm_size: 256m
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U register -d register"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d register"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -38,6 +36,10 @@ services:
   migrate:
     <<: *register
     command: ["migrate"]
+    environment:
+      REGISTER_MIGRATE_DATABASE_URL_FILE: /run/secrets/migrate_database_url
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    secrets: [migrate_database_url]
     restart: "no"
     depends_on:
       postgres:
@@ -47,6 +49,10 @@ services:
     <<: *register
     # one pass every hour; a pass with nothing new costs a few requests
     command: ["sync", "--every", "${REGISTER_SYNC_EVERY:-1h}"]
+    environment:
+      REGISTER_SYNC_DATABASE_URL_FILE: /run/secrets/sync_database_url
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    secrets: [sync_database_url]
     volumes:
       - work:/var/lib/accquix-register
     depends_on:
@@ -71,6 +77,16 @@ services:
 secrets:
   postgres_password:
     file: ./secrets/postgres_password
+  migrate_password:
+    file: ./secrets/migrate_password
+  sync_password:
+    file: ./secrets/sync_password
+  api_password:
+    file: ./secrets/api_password
+  migrate_database_url:
+    file: ./secrets/migrate_database_url
+  sync_database_url:
+    file: ./secrets/sync_database_url
   database_url:
     file: ./secrets/database_url
   api_keys:

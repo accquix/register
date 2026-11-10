@@ -18,6 +18,8 @@ to a file holding the value; setting both is an error.
 | `sync --unblock --source rpo` / `fs:<list>` | Restores a source after a validation block. |
 | `serve` | The HTTP API. |
 | `suppress --subject <IČO> [--undo] [--reason TEXT]` | Keeps a subject out of name search, or puts it back. |
+| `suppress --list` | Prints every objection in the backup format. Keep the output private. |
+| `suppress --restore FILE` | Puts a backup back (`-` reads standard input); run it before the first `sync` of a rebuilt database. |
 | `openapi` | Prints the OpenAPI 3.1 document. |
 | `version` | Prints the version. |
 
@@ -45,6 +47,9 @@ command-line mistake.
 | `REGISTER_RPO_DAILY_MAX_RECORDS` | `20000` | A larger daily file is rejected. |
 | `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | A smaller new snapshot blocks absence marking. |
 | `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: absence marking above this share of active records is blocked. |
+| `REGISTER_RPO_DATE_SKEW_DAYS` | `1` | RPO: a file whose `exportDate` is further than this from the date in its name is rejected; a date after tomorrow always is. |
+| `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS` | `2000000` | RPO: a first snapshot with fewer records is not published. |
+| `REGISTER_FS_SKIP_MIN_ROWS` | `false` | Drops the row floors of the large lists (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000). |
 | `REGISTER_FS_MAX_DROP` | per list | Overrides the drop threshold of every list (defaults: 0.03 for `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0.20 for the small lists). |
 
 ## API

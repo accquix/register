@@ -41,7 +41,14 @@ type RPOConfig struct {
 	DailyMaxRecords  int     // a daily file above this is rejected (20 000)
 	SnapshotMinRatio float64 // a snapshot below this share of the previous one blocks absence marking (0.98)
 	AbsenceMaxRatio  float64 // absence marking is blocked above this share of active rows (0.005)
-	Log              *slog.Logger
+	// DateSkewDays is how far a file's exportDate may be from the date in its name (default 1; the
+	// two were equal in every file checked on 2026-11-10). A negative value disables the comparison;
+	// an exportDate after tomorrow is always rejected.
+	DateSkewDays int
+	// BootstrapMinRecords: a first snapshot with fewer records is not published (0 = no minimum).
+	BootstrapMinRecords int
+	Now                 func() time.Time // default time.Now
+	Log                 *slog.Logger
 }
 
 func (c *RPOConfig) defaults() {
@@ -59,6 +66,12 @@ func (c *RPOConfig) defaults() {
 	}
 	if c.AbsenceMaxRatio <= 0 {
 		c.AbsenceMaxRatio = 0.005
+	}
+	if c.DateSkewDays == 0 {
+		c.DateSkewDays = 1
+	}
+	if c.Now == nil {
+		c.Now = time.Now
 	}
 	if c.Log == nil {
 		c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -273,11 +286,15 @@ func (s *RPO) completeSnapshot(ctx context.Context, inv rpo.Inventory, after str
 		if len(names) == 0 {
 			continue
 		}
+		// Complete means: the manifest lists parts 001..N without a hole, every one of them is in
+		// the bucket, and the bucket holds no part of this snapshot that the manifest does not list
+		// (the manifest is written before the last parts; a part outside it means either file is
+		// still being published).
 		var parts []rpo.Object
-		complete := true
-		for _, n := range names {
+		complete := len(names) == len(snap.Parts)
+		for i, n := range names {
 			o, ok := snap.Parts[n]
-			if !ok {
+			if !ok || n != fmt.Sprintf("init_%s_%03d.json.gz", d, i+1) {
 				complete = false
 				break
 			}
@@ -316,10 +333,14 @@ func (s *RPO) apply(ctx context.Context, obj rpo.Object, path string, u ingest.R
 		return ingest.UnitResult{}, err
 	}
 	u.Open = func() (io.ReadCloser, error) { return os.Open(path) }
+	u.CheckDate = s.dateCheck(obj)
 	t0 := time.Now()
 	res, err := ingest.ApplyRPO(ctx, s.conn, u)
 	if err != nil {
 		if errors.Is(err, ingest.ErrRejected) {
+			// Drop the local copy: a corrected file of the same size must be downloaded again, not
+			// taken for the rejected one.
+			_ = os.Remove(path)
 			if rerr := ingest.RecordRejected(ctx, s.conn, u.Name, "rpo", u.SHA256, err.Error()); rerr != nil {
 				return res, errors.Join(err, rerr)
 			}
@@ -357,6 +378,24 @@ func (s *RPO) dailyValidator() func(int) error {
 }
 
 func unitName(obj rpo.Object) string { return "rpo:" + filepath.Base(obj.Key) }
+
+// dateCheck validates a file's exportDate: never after tomorrow (time zones), and within
+// DateSkewDays of the date in the file name.
+func (s *RPO) dateCheck(obj rpo.Object) func(time.Time) error {
+	return func(export time.Time) error {
+		if latest := s.cfg.Now().UTC().Truncate(day).Add(day); export.After(latest) {
+			return fmt.Errorf("export date %s is in the future", fmtDay(export))
+		}
+		named, ok := rpo.KeyDate(obj.Key)
+		if !ok || s.cfg.DateSkewDays < 0 {
+			return nil
+		}
+		if diff := export.Sub(named); diff > time.Duration(s.cfg.DateSkewDays)*day || diff < -time.Duration(s.cfg.DateSkewDays)*day {
+			return fmt.Errorf("export date %s is more than %d day(s) from the date in the file name", fmtDay(export), s.cfg.DateSkewDays)
+		}
+		return nil
+	}
+}
 
 // applyParts applies the parts of a snapshot that are not applied yet, downloading them in
 // parallel first. It returns the total records of all parts.
@@ -431,6 +470,26 @@ func (s *RPO) bootstrap(ctx context.Context, st *State, inv rpo.Inventory) error
 			}
 		}
 		through = fmtDay(d)
+	}
+
+	// Before publishing, the set must still be the one that was applied, and large enough to be a
+	// whole register: once published, the API answers "not found" for everything that is missing.
+	fresh, err := s.cfg.Bucket.Inventory(ctx)
+	if err != nil {
+		return err
+	}
+	if again, ok := fresh.Snapshots[date]; !ok {
+		s.cfg.Log.Warn("rpo bootstrap: the snapshot left the bucket before publication; waiting", "snapshot", date)
+		return nil
+	} else if _, parts2, sha2, err := s.completeSnapshot(ctx, rpo.Inventory{Snapshots: map[string]*rpo.Snapshot{date: again}}, ""); err != nil {
+		return err
+	} else if sha2 != manifestSHA || len(parts2) != len(parts) {
+		s.cfg.Log.Warn("rpo bootstrap: the snapshot changed while it was applied; waiting", "snapshot", date)
+		return nil
+	}
+	if floor := int64(s.cfg.BootstrapMinRecords); total < floor {
+		return fmt.Errorf("%w: snapshot %s has %d records in %d parts, fewer than the minimum of %d for a first publication",
+			ingest.ErrRejected, date, total, len(parts), floor)
 	}
 
 	// Publish: build the search layer and switch the state in one transaction (D22).

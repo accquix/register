@@ -8,7 +8,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -48,6 +51,8 @@ modes:
                                   --every (e.g. 1h) it repeats until stopped
   suppress --subject ICO [--undo] [--reason TEXT]
                                   keep a subject out of name search (GDPR objection)
+  suppress --list                 print every objection (the backup format) to standard output
+  suppress --restore FILE         put a backup made with --list back ("-" reads standard input)
   sync --unblock --source S       after a validation block (S: rpo or fs:<list>)
   openapi                         print the OpenAPI 3.1 document (YAML)
   version                         print the version
@@ -94,7 +99,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env confi
 	case "serve":
 		err = runServe(ctx, cfg, log)
 	case "suppress":
-		err = runSuppress(ctx, cfg, rest, stdout)
+		err = runSuppress(ctx, cfg, rest, os.Stdin, stdout)
 	case "openapi":
 		err = runOpenAPI(stdout)
 	default:
@@ -224,12 +229,13 @@ func syncPass(ctx context.Context, conn *pgx.Conn, cfg config.Config, src string
 			DailyMaxRecords:  cfg.RPODailyMaxRecords,
 			SnapshotMinRatio: cfg.RPOSnapshotMinRatio,
 			AbsenceMaxRatio:  cfg.AbsenceMaxRatio,
-			Log:              log,
+			DateSkewDays:     cfg.RPODateSkewDays, BootstrapMinRecords: cfg.RPOBootstrapMinRecords,
+			Log: log,
 		}).Run(ctx))
 	}
 	if src == "fs" || src == "all" {
 		errs = append(errs, syncer.NewFS(conn, syncer.FSConfig{
-			Client: fs.NewClient(cfg.FSBaseURL), WorkDir: cfg.WorkDir, MaxDrop: cfg.FSMaxDrop, Log: log,
+			Client: fs.NewClient(cfg.FSBaseURL), WorkDir: cfg.WorkDir, MaxDrop: cfg.FSMaxDrop, SkipMinRows: cfg.FSSkipMinRows, Log: log,
 		}).Run(ctx))
 	}
 	for i, e := range errs {
@@ -292,20 +298,49 @@ func runOpenAPI(stdout io.Writer) error {
 	return err
 }
 
-func runSuppress(ctx context.Context, cfg config.Config, args []string, stdout io.Writer) error {
+func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io.Reader, stdout io.Writer) error {
 	fset := flag.NewFlagSet("suppress", flag.ContinueOnError)
 	fset.SetOutput(io.Discard)
 	subject := fset.String("subject", "", "the subject's IČO (or r<RPO id> for a record without one)")
 	undo := fset.Bool("undo", false, "put the subject back into name search")
 	reason := fset.String("reason", "", "operator note, e.g. a ticket number; never personal data")
+	list := fset.Bool("list", false, "print every objection in the backup format")
+	restore := fset.String("restore", "", "restore objections from a file written by --list (- for standard input)")
 	if err := fset.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
+	modes := 0
+	for _, on := range []bool{*subject != "", *list, *restore != ""} {
+		if on {
+			modes++
+		}
+	}
+	if modes != 1 || ((*list || *restore != "") && (*undo || *reason != "")) {
+		return fmt.Errorf("%w: suppress: --subject needs an IČO (8 digits) or r<RPO id>; alone, use --list or --restore FILE", errUsage)
+	}
 	key := strings.TrimSpace(*subject)
-	if ico, ok := normalize.ICO(key); ok {
-		key = ico
-	} else if _, err := strconv.ParseUint(strings.TrimPrefix(key, "r"), 10, 64); err != nil || !strings.HasPrefix(key, "r") {
-		return fmt.Errorf("%w: --subject needs an IČO (8 digits) or r<RPO id>", errUsage)
+	if *subject != "" {
+		if ico, ok := normalize.ICO(key); ok {
+			key = ico
+		} else if !ingest.ValidSuppressionKey(key) {
+			return fmt.Errorf("%w: --subject needs an IČO (8 digits) or r<RPO id>", errUsage)
+		}
+	}
+	var backup []ingest.Suppression
+	if *restore != "" {
+		in := stdin
+		if *restore != "-" {
+			f, err := os.Open(*restore)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			in = f
+		}
+		var err error
+		if backup, err = readSuppressions(in); err != nil {
+			return err
+		}
 	}
 	if cfg.SyncDatabaseURL == "" {
 		return errors.New("REGISTER_SYNC_DATABASE_URL or REGISTER_DATABASE_URL is required")
@@ -315,6 +350,21 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdout i
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
+	switch {
+	case *list:
+		rows, err := ingest.ListSuppressions(ctx, conn)
+		if err != nil {
+			return err
+		}
+		return writeSuppressions(stdout, rows)
+	case *restore != "":
+		added, err := ingest.RestoreSuppressions(ctx, conn, backup)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "restored: %d objections in the file, %d added\n", len(backup), added)
+		return nil
+	}
 	if err := ingest.Suppress(ctx, conn, key, *reason, !*undo); err != nil {
 		return err
 	}
@@ -324,4 +374,61 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdout i
 		fmt.Fprintln(stdout, "kept out of name search; exact lookup is unaffected")
 	}
 	return nil
+}
+
+// The backup format of the objections: one tab-separated line per row (key, origin, created at,
+// reason), then a trailer with the row count and the SHA-256 of the lines before it. The trailer
+// lets a restore refuse a truncated or altered file. Keep the file private and encrypted: it lists
+// the people who objected.
+const suppressionTrailer = "#accquix-register-objections"
+
+func suppressionLine(s ingest.Suppression) string {
+	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
+	return strings.Join([]string{s.SKey, s.Origin, s.CreatedAt.UTC().Format(time.RFC3339Nano), clean(s.Reason)}, "\t") + "\n"
+}
+
+func writeSuppressions(w io.Writer, rows []ingest.Suppression) error {
+	h := sha256.New()
+	for _, s := range rows {
+		line := suppressionLine(s)
+		h.Write([]byte(line))
+		if _, err := io.WriteString(w, line); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(w, "%s\t%d\t%s\n", suppressionTrailer, len(rows), hex.EncodeToString(h.Sum(nil)))
+	return err
+}
+
+func readSuppressions(r io.Reader) ([]ingest.Suppression, error) {
+	var out []ingest.Suppression
+	h := sha256.New()
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		f := strings.Split(line, "\t")
+		if f[0] == suppressionTrailer {
+			if len(f) != 3 || f[1] != strconv.Itoa(len(out)) || f[2] != hex.EncodeToString(h.Sum(nil)) {
+				return nil, errors.New("restore: the file is damaged or incomplete (count or checksum mismatch)")
+			}
+			if sc.Scan() {
+				return nil, errors.New("restore: data after the trailer")
+			}
+			return out, sc.Err()
+		}
+		if len(f) != 4 {
+			return nil, fmt.Errorf("restore: line %d is not in the backup format", len(out)+1)
+		}
+		at, err := time.Parse(time.RFC3339Nano, f[2])
+		if err != nil || !ingest.ValidSuppressionKey(f[0]) || (f[1] != "" && !ingest.ValidSuppressionKey(f[1])) {
+			return nil, fmt.Errorf("restore: line %d is not in the backup format", len(out)+1)
+		}
+		h.Write([]byte(line + "\n"))
+		out = append(out, ingest.Suppression{SKey: f[0], Origin: f[1], CreatedAt: at, Reason: f[3]})
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return nil, errors.New("restore: the file has no trailer; it is incomplete")
 }

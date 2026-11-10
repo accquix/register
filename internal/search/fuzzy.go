@@ -102,8 +102,14 @@ func (s *Searcher) corrections(ctx context.Context, w string, last bool) ([]stri
 	if _, err := tx.Exec(ctx, "SET LOCAL pg_trgm.similarity_threshold = 0.3"); err != nil {
 		return nil, 0, err
 	}
-	rows, err := tx.Query(ctx, `SELECT word, freq FROM search_word WHERE word % $1
-ORDER BY similarity(word, $1) DESC, freq DESC LIMIT 60`, w)
+	// A correction is offered only when a subject that is not suppressed uses the word: the
+	// dictionary must never reveal a word (a surname) that only suppressed subjects carry.
+	rows, err := tx.Query(ctx, `SELECT c.word, c.freq FROM (
+  SELECT word, freq, similarity(word, $1) AS sim FROM search_word WHERE word % $1
+  ORDER BY sim DESC, freq DESC LIMIT 60) c
+WHERE EXISTS (SELECT 1 FROM search_token t WHERE t.token = c.word
+  AND NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = t.skey))
+ORDER BY c.sim DESC, c.freq DESC`, w)
 	if err != nil {
 		return nil, 0, err
 	}

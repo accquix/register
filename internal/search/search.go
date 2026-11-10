@@ -38,6 +38,11 @@ func New(pool *pgxpool.Pool, cfg Config) *Searcher {
 	return &Searcher{pool: pool, cfg: cfg}
 }
 
+// NotSuppressed filters objections again at query time (alias n = search_name). The sync already
+// leaves suppressed subjects out of the search layer; this second check means a row that is still
+// there for any reason (an interrupted refresh, a manual change to the tables) is never returned.
+const NotSuppressed = `NOT EXISTS (SELECT 1 FROM search_suppression x WHERE x.skey = n.skey)`
+
 // Hit is one matched name of a subject.
 type Hit struct {
 	SKey     string
@@ -111,8 +116,9 @@ func (s *Searcher) Default(ctx context.Context, core string, limit int) (Result,
 }
 
 func (s *Searcher) namePrefix(ctx context.Context, core string) ([]Hit, error) {
-	rows, err := s.pool.Query(ctx, `SELECT skey, name_core, name FROM search_name WHERE name_core LIKE $1
-ORDER BY name_core USING ~<~ LIMIT 50`, core+"%")
+	rows, err := s.pool.Query(ctx, `SELECT n.skey, n.name_core, n.name FROM search_name n WHERE n.name_core LIKE $1
+  AND `+NotSuppressed+`
+ORDER BY n.name_core USING ~<~ LIMIT 50`, core+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +162,7 @@ func (s *Searcher) wordCandidates(ctx context.Context, conds []cond) ([]Hit, boo
 	}
 	args = append(args, s.cfg.WordCap)
 	sql := `SELECT n.skey, n.name_core, n.name FROM (SELECT DISTINCT t.skey FROM search_token t WHERE ` + where +
-		fmt.Sprintf(` LIMIT $%d) c JOIN search_name n USING (skey)`, len(args))
+		fmt.Sprintf(` LIMIT $%d) c JOIN search_name n USING (skey) WHERE `, len(args)) + NotSuppressed
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, false, err

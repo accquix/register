@@ -49,7 +49,9 @@ accquix-register suppress --subject 99900004 --reason "ticket 123"
 accquix-register suppress --subject 99900004 --undo
 ```
 
-The suppression is kept by IČO, so a new RPO record of the same person stays suppressed. Do not put personal data
+The suppression is kept by IČO, so a new RPO record of the same person stays suppressed; it also follows a record
+that gains or loses its IČO. Back the list up after every change (`suppress --list`, see
+[Database](/self-hosting/database)): it is the only data a rebuild cannot restore. Do not put personal data
 into `--reason`.
 
 ## Upgrades

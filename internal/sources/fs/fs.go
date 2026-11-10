@@ -40,17 +40,21 @@ type List struct {
 	Slug    string
 	Target  Target
 	MaxDrop float64 // a new version may have at most this share fewer rows than the active ones (D23)
+	MinRows int     // a version with fewer distinct rows is rejected, also on the first load; 0 = no floor
 }
 
 // Lists are the six exports the register mirrors. The IBAN lists (ds_dph_iban, ds_dph_oud) are
 // CC BY-NC-ND and are never ingested.
+//
+// MinRows is about a third of the size measured on 2026-11-10 (docs/sources.md): far below any
+// real version, far above a truncated or empty one. The three small lists have no floor.
 var Lists = []List{
-	{"ds_dphs", VATPayers, 0.03},
-	{"ds_dsrdp", TaxSubjects, 0.03},
-	{"ds_iz_ran", ListEntries, 0.03},
-	{"ds_dphz", ListEntries, 0.20},
-	{"ds_dphv", ListEntries, 0.20},
-	{"ds_dpho", ListEntries, 0.20},
+	{"ds_dphs", VATPayers, 0.03, 100_000},
+	{"ds_dsrdp", TaxSubjects, 0.03, 500_000},
+	{"ds_iz_ran", ListEntries, 0.03, 200_000},
+	{"ds_dphz", ListEntries, 0.20, 0},
+	{"ds_dphv", ListEntries, 0.20, 0},
+	{"ds_dpho", ListEntries, 0.20, 0},
 }
 
 // ListBySlug finds a list definition.

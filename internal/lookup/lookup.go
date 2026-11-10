@@ -80,7 +80,10 @@ func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 		}
 		if pub != nil {
 			si.PublishedAsOf = pub.Format("2006-01-02")
-			si.Stale = today.Sub(pub.UTC().Truncate(24*time.Hour)) > time.Duration(si.MaxAgeDays)*24*time.Hour
+			age := today.Sub(pub.UTC().Truncate(24 * time.Hour))
+			// A date after tomorrow cannot be right: never treat it as fresh (the sync rejects such
+			// files; this is the second line, for data that got in some other way).
+			si.Stale = age > time.Duration(si.MaxAgeDays)*24*time.Hour || age < -24*time.Hour
 		}
 		out[si.Source] = si
 	}

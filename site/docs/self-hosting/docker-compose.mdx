@@ -16,15 +16,20 @@ description: The reference deployment, its services, secrets and settings.
 
 ## Secrets
 
-There are no default credentials. `make-secrets.sh` creates three files in `secrets/`:
+There are no default credentials. `make-secrets.sh` creates the files in `secrets/`. Each process has its own
+database role and gets only its own secret: `migrate` owns the schema, `sync` reads and writes the tables, `serve`
+can only read. The roles are created when PostgreSQL first starts; no register process connects as the superuser.
 
 <FileTree>
 - deploy/compose/
   - compose.yaml
   - make-secrets.sh
   - secrets/
-    - postgres_password
-    - database_url
+    - postgres_password (the superuser: for you, never for the register)
+    - migrate_password, sync_password, api_password
+    - migrate_database_url
+    - sync_database_url
+    - database_url (the API role)
     - api_keys
 </FileTree>
 
@@ -51,5 +56,6 @@ docker compose logs -f sync                       # watch the sync
 docker compose exec serve accquix-register version
 docker compose run --rm sync sync --source fs     # one extra pass of the FS lists
 docker compose down                               # stop; data stays in the pgdata volume
-docker compose down -v                            # stop and delete the data (rebuilt by the next sync)
+docker compose run --rm -T sync suppress --list > objections.tsv   # back up the objections
+docker compose down -v                            # stop and delete the data: back up the objections first
 ```

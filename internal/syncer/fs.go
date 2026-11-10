@@ -24,7 +24,11 @@ type FSConfig struct {
 	// MaxDrop, when > 0, replaces every list's drop/absence threshold (to accept a list that
 	// legitimately shrank: unblock, then run once with a higher value).
 	MaxDrop float64
-	Log     *slog.Logger
+	// SkipMinRows drops the per-list row floors (tests with small synthetic lists; an operator who
+	// must accept a list that legitimately fell below its floor).
+	SkipMinRows bool
+	Now         func() time.Time // default time.Now
+	Log         *slog.Logger
 }
 
 // FS syncs each list independently: a conditional GET, and a new version is one unit. A blocked
@@ -39,10 +43,15 @@ func NewFS(conn *pgx.Conn, cfg FSConfig) *FS {
 	if cfg.Lists == nil {
 		cfg.Lists = fs.Lists
 	}
-	if cfg.MaxDrop > 0 {
+	if cfg.MaxDrop > 0 || cfg.SkipMinRows {
 		lists := make([]fs.List, len(cfg.Lists))
 		for i, l := range cfg.Lists {
-			l.MaxDrop = cfg.MaxDrop
+			if cfg.MaxDrop > 0 {
+				l.MaxDrop = cfg.MaxDrop
+			}
+			if cfg.SkipMinRows {
+				l.MinRows = 0
+			}
 			lists[i] = l
 		}
 		cfg.Lists = lists
@@ -106,7 +115,7 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 	name := fmt.Sprintf("%s:%s", src, f.SHA256[:16])
 	t0 := time.Now()
 	res, err := ingest.ApplyFS(ctx, s.conn, ingest.FSUnit{
-		List: l, Name: name, SHA256: f.SHA256, Path: f.Path, PrevAsOf: prev,
+		List: l, Name: name, SHA256: f.SHA256, Path: f.Path, PrevAsOf: prev, Now: s.cfg.Now,
 		After: func(ctx context.Context, tx pgx.Tx, r ingest.FSResult) error {
 			ns := st
 			day := fmtDay(r.AsOf)

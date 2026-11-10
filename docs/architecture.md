@@ -68,7 +68,11 @@ subject/search layer that `sync` maintains in the same unit transaction.
 - After each unit, `sync` recomputes these rows for the subjects the unit touched.
 - Only active subjects are in the search layer; terminated subjects are reachable by exact lookup.
   A subject listed in `search_suppression` (an objection, keyed by subject key) is left out of the
-  search layer only.
+  search layer only. Because a subject key changes when a record gains or loses an IČO, the sync
+  keeps the table closed over both forms (a suppressed IČO covers every record that carries it; a
+  suppressed record covers the IČO it carries), the search queries filter on it again, and fuzzy
+  search never offers a word that only suppressed subjects use. Changes to the table and rebuilds
+  of search rows are serialised by a table lock.
 
 ### Normalisation rules (pure Go, shared by ingest and search)
 
@@ -232,7 +236,9 @@ temporary file first, because a ZIP's index is at the end. Set `GOMEMLIMIT`.
   authenticated keys only (D26).
 - **Objections:** `accquix-register suppress --subject <IČO>` adds the subject to `search_suppression`
   (and `--undo` removes it). The person stays reachable by exact
-  identifier and disappears from name search.
+  identifier and disappears from name search. The objection follows the subject when its key
+  changes. The table is the only state that cannot be rebuilt from the sources:
+  `suppress --list` exports it and `suppress --restore` puts it back before the first sync.
 - **The deployer is the controller.** `docs/self-hosting.md` will say so (to write).
 
 ## Deployment
@@ -252,8 +258,10 @@ temporary file first, because a ZIP's index is at the end. Set `GOMEMLIMIT`.
 | Register container | 256 MB RAM | 512 MB |
 | First run | about 10–20 min, mostly downloading | — |
 
-- **No backups needed:** the database can always be rebuilt from the official sources, and
-  versions are content hashes, so a rebuild yields the same versions.
+- **Backups:** the register data can always be rebuilt from the official sources, and versions are
+  content hashes, so a rebuild yields the same versions. The objections (`search_suppression`)
+  cannot: they must be backed up and restored before the sync of a rebuilt database
+  (`docs/self-hosting.md`).
 - **Alerts:** daily RPO not applied for 24 h; last applied daily older than 30 days; an FS list
   older than 2 days (`ds_iz_ran` 14); a source `blocked`. `/v1/sources` and `/readyz` expose all of
   them.
@@ -270,7 +278,8 @@ up to about 30 minutes) can host it, against any PostgreSQL. Deployment guides t
 
 **Database roles:** an API role with SELECT only, which can go through a transaction pooler; a sync
 role with write rights, on a direct connection (advisory lock, COPY); a migration role for DDL. Use
-TLS `verify-full` to managed databases.
+TLS `verify-full` to managed databases. The reference compose creates exactly these roles; no
+process connects as a superuser.
 
 **Scaling:** add `serve` replicas behind a connection pooler and size the database CPU by
 measured load. The fuzzy concurrency limit is per replica (D18).

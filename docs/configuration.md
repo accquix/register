@@ -14,6 +14,9 @@ This page lists what is implemented so far. It grows with each stage.
 | `accquix-register migrate down-to N` | Rolls back to version N (0 = empty schema) |
 | `accquix-register sync [--source rpo\|fs\|all]` | One sync pass (default `all`): the Register of Legal Entities (bootstrap, monthly reconcile, daily files) and the six Financial Administration lists. Safe to run often: a pass with nothing new costs a few requests (about 1–2 s) |
 | `accquix-register sync --unblock --source rpo` or `--source fs:<list>` | After a validation block: restores the previous state. Run it once the cause is understood |
+| `accquix-register suppress --subject <IČO> [--undo] [--reason TEXT]` | Keeps a subject out of name search (an objection), or puts it back. The subject is an IČO, or `r<RPO id>` for a record without one. It waits for a sync unit that is being applied |
+| `accquix-register suppress --list` | Prints every objection in the backup format (tab-separated, with a count and checksum trailer). Keep the output private |
+| `accquix-register suppress --restore FILE` | Puts a backup back (`-` reads standard input). Run it on a rebuilt database **before** the first `sync`. It only adds rows |
 | `accquix-register serve` | The read-only HTTP API (see below) |
 | `accquix-register openapi` | Prints the OpenAPI 3.1 document; the committed copy is `api/openapi.yaml` |
 | `accquix-register version` | Prints the version |
@@ -34,10 +37,13 @@ source), `2` a command-line mistake.
 | `REGISTER_DOWNLOAD_CONCURRENCY` | `6` | Parallel snapshot part downloads |
 | `REGISTER_RPO_PART_RECORDS` | `100000` | Records in every snapshot part except the last; a part that differs is rejected |
 | `REGISTER_RPO_DAILY_MAX_RECORDS` | `20000` | A daily file with more records is rejected |
+| `REGISTER_RPO_DATE_SKEW_DAYS` | `1` | A file whose `exportDate` is further than this from the date in its name is rejected. An `exportDate` after tomorrow is always rejected |
+| `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS` | `2000000` | A first snapshot with fewer records is not published (the register had about 2.28 M on 2026-11-07) |
 | `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | A new snapshot smaller than this share of the previous one blocks absence marking |
 | `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: absence marking is blocked when more than this share of active records would be marked |
 | `REGISTER_FS_BASE_URL` | `https://report.financnasprava.sk` | Base URL of the Financial Administration list exports |
 | `REGISTER_FS_MAX_DROP` | per list | Overrides every FS list's threshold for a drop in rows and for rows marked absent. Defaults: 0.03 for `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0.20 for `ds_dphz`, `ds_dphv`, `ds_dpho` |
+| `REGISTER_FS_SKIP_MIN_ROWS` | `false` | The large lists have a row floor (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000): a smaller version is rejected, also on the first load. `true` drops the floors, to accept a list that legitimately fell below one |
 
 ### serve
 
@@ -62,16 +68,20 @@ route, status, duration and key name only.
 
 ## How a sync pass behaves (RPO)
 
-- **First run (bootstrap):** waits until the newest snapshot is complete (its manifest and every
-  listed part are in the bucket), downloads the parts in parallel, applies them, applies the daily
-  files after the snapshot, builds the search layer and only then publishes (D22).
+- **First run (bootstrap):** waits until the newest snapshot is complete (its manifest lists parts
+  001..N without a hole, every one is in the bucket, and the bucket holds no part the manifest does
+  not list), downloads the parts in parallel, applies them, applies the daily files after the
+  snapshot, checks that the manifest did not change meanwhile and that the total reaches
+  `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS`, builds the search layer and only then publishes (D22).
 - **Later runs:** applies the next daily file, one day at a time. A missing day is never skipped:
   the state becomes `gap_wait` until the file arrives or a newer snapshot heals the gap.
 - **Monthly:** a complete snapshot newer than the last one is reconciled: changed records are
   merged under the order guard, and records it no longer contains are marked absent (within the
   threshold).
 - **Validation (D23):** a file that breaks a threshold is not applied, the previous data stays, and
-  the source becomes `blocked` with a diagnostic until `--unblock`.
+  the source becomes `blocked` with a diagnostic until `--unblock`. This includes the file's
+  `exportDate`: it orders the updates, so a date in the future, or far from the date in the file
+  name, is rejected before anything is staged.
 - **Crash safety:** every file is one transaction with a checkpoint; a killed pass resumes where it
   stopped.
 
@@ -79,7 +89,8 @@ route, status, duration and key name only.
 
 - Each list is independent: a conditional GET with the stored ETag (`304` → nothing to do); the
   same content under a new ETag only updates the ETag; a new version is one unit.
-- **Validation (D23):** the list date must not be older than the applied one; every item must parse
+- **Validation (D23):** the list date must not be older than the applied one and not after
+  tomorrow; a large list must reach its row floor; every item must parse
   (0 errors); the row count may drop, and rows may disappear, by at most the list's threshold.
   A list that fails is `blocked` alone; the others continue.
 - Duplicate keys keep the row with the lowest content hash; their number is in the unit's detail.

@@ -58,6 +58,17 @@ func Classify(objs []Object) Inventory {
 	return inv
 }
 
+// KeyDate returns the date in the name of a daily file or a snapshot part.
+func KeyDate(key string) (time.Time, bool) {
+	for _, re := range []*regexp.Regexp{reDaily, rePart} {
+		if m := re.FindStringSubmatch(key); m != nil {
+			d, err := time.Parse("2006-01-02", m[1])
+			return d, err == nil
+		}
+	}
+	return time.Time{}, false
+}
+
 // SnapshotDates returns the snapshot dates, newest first.
 func (inv Inventory) SnapshotDates() []string {
 	out := make([]string, 0, len(inv.Snapshots))

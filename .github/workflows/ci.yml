@@ -73,6 +73,17 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/readyz)" = 503
           test "$(curl -s -o /dev/null -w '%{http_code}' 'localhost:8080/v1/search?q=x')" = 401
           test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = 0
+      - name: "roles: no register process is a superuser, and the API role cannot write"
+        working-directory: deploy/compose
+        run: |
+          sql() { docker compose exec -T postgres psql -U postgres -d register -At -c "$1"; }
+          test "$(sql "select count(*) from pg_roles where rolname like 'register\_%' and (rolsuper or rolcreaterole or rolcreatedb or rolbypassrls)")" = 0
+          test "$(sql "select count(*) from pg_roles where rolname in ('register_migrate','register_sync','register_api')")" = 3
+          as_api() { docker compose exec -T postgres sh -c 'PGPASSWORD=$(cat /run/secrets/api_password) psql -h 127.0.0.1 -U register_api -d register -At -v ON_ERROR_STOP=1 -c "$1"' sh "$1"; }
+          test "$(as_api 'select count(*) from sync_source')" = 0
+          ! as_api "insert into search_suppression (skey) values ('99900001')"
+          ! as_api "create table t (x int)"
+          ! as_api "copy (select 1) to program 'id'"
       - name: logs on failure
         if: failure()
         working-directory: deploy/compose

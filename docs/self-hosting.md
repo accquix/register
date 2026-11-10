@@ -13,7 +13,9 @@ publishes them. When you run an instance, **you** are the controller of that cop
 - keep the API behind keys (the default); anonymous access needs `REGISTER_ALLOW_ANONYMOUS=true`
   and then disables the DIČ lookup of natural persons without an IČO;
 - handle objections: `accquix-register suppress --subject <IČO> --reason <ticket>` keeps a
-  subject out of name search (exact lookup still works); `--undo` reverses it;
+  subject out of name search (exact lookup still works); `--undo` reverses it. The list of
+  objections is the one thing the official sources cannot give back: **back it up** (see
+  [Backups](#backups-the-objections));
 - the register stores only what identifies a business: no residence when it differs from the place
   of business, no birth data, no statutory bodies or representatives. Logs contain no queries and
   no identifiers.
@@ -37,7 +39,7 @@ Supabase and RDS.
 
 ```sh
 git clone https://github.com/accquix/register && cd register/deploy/compose
-./make-secrets.sh            # random database password and one API key (printed once)
+./make-secrets.sh            # random database passwords and one API key (printed once)
 docker compose up -d         # postgres → migrate → serve + sync (hourly)
 docker compose logs -f sync  # the first run downloads and publishes the data
 curl -s localhost:8080/readyz
@@ -48,6 +50,12 @@ curl -s -H "Authorization: Bearer <key>" "localhost:8080/v1/search?q=tatra%20ban
 compose mounts them as they are, and the containers do not run as your user. If you write the
 files yourself, do the same, or the register fails with `permission denied` on
 `/run/secrets/...`.
+
+Compose creates three database roles when PostgreSQL first starts (`initdb/10-roles.sh`), and
+each process gets only its own: `migrate` owns the schema, `sync` reads and writes the tables,
+`serve` can only `SELECT`. No register process connects as the superuser. A deployment made
+before this layout (one `database_url` for everything) keeps working as the superuser until you
+recreate it: `make-secrets.sh` refuses to continue and tells you so.
 
 The API answers `503 bootstrapping` until the first sync has published every source. The API is
 published on `127.0.0.1:8080`; set `REGISTER_PUBLISH=0.0.0.0:8080` only behind your own TLS
@@ -65,38 +73,66 @@ The image runs anywhere that offers a long-lived HTTP container and a scheduled 
 
 ## Database roles
 
-Separate roles keep the API read-only:
+Separate roles keep the API read-only. The compose deployment creates them for you; on your own
+PostgreSQL, run this as an administrator **before** `migrate`:
 
 ```sql
 CREATE ROLE register_migrate LOGIN PASSWORD '...';   -- owns the schema, runs migrate
-CREATE ROLE register_sync    LOGIN PASSWORD '...';
-CREATE ROLE register_api     LOGIN PASSWORD '...';
--- after `migrate` as register_migrate:
-GRANT USAGE ON SCHEMA public TO register_sync, register_api;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO register_sync;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO register_sync;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO register_api;
--- tables added by later migrations get the same rights:
+CREATE ROLE register_sync    LOGIN PASSWORD '...';   -- sync and suppress
+CREATE ROLE register_api     LOGIN PASSWORD '...';   -- serve
+ALTER DATABASE register OWNER TO register_migrate;   -- or: GRANT CREATE ON DATABASE and ON SCHEMA public
+GRANT TEMPORARY ON DATABASE register TO register_sync;
+-- rights on everything migrate creates, now and in later versions:
 ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO register_sync;
+ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public GRANT USAGE ON SEQUENCES TO register_sync;
 ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public GRANT SELECT ON TABLES TO register_api;
+-- the API never writes, and the server cuts a runaway query too:
+ALTER ROLE register_api SET default_transaction_read_only = on;
+ALTER ROLE register_api SET statement_timeout = '10s';
 ```
 
-Then set `REGISTER_MIGRATE_DATABASE_URL`, `REGISTER_SYNC_DATABASE_URL` and `REGISTER_DATABASE_URL`
-(the API) to the three roles. The sync creates temporary tables, so it also needs
-`TEMPORARY` on the database (granted to `PUBLIC` by default).
+On PostgreSQL 17 and 18 also add `MAINTAIN` to the sync role's table rights, so that it can
+`ANALYZE` the search tables after a rebuild (without it PostgreSQL only prints a warning and
+autovacuum does it later). If the tables already exist, grant the same rights with
+`GRANT ... ON ALL TABLES IN SCHEMA public` and `GRANT USAGE ON ALL SEQUENCES IN SCHEMA public`.
 
-**Connections:** the sync needs a **direct** connection (advisory lock, COPY); the API can go
-through a transaction pooler (PgBouncer). Use `sslmode=verify-full` to managed databases.
+Then set `REGISTER_MIGRATE_DATABASE_URL`, `REGISTER_SYNC_DATABASE_URL` and `REGISTER_DATABASE_URL`
+(the API) to the three roles. Never give `serve` a role that can write.
+
+**Connections:** the sync needs a **direct** connection (advisory lock, COPY, table lock); the API
+can go through a transaction pooler (PgBouncer). Use `sslmode=verify-full` to managed databases.
 
 **PlanetScale Postgres:** `pg_strict` is compatible (the register never runs `UPDATE`/`DELETE`
 without `WHERE`); use port 5432 for the sync and 6432 (PgBouncer) for the API.
 
-## Backups
+## Backups: the objections
 
-Not needed. The database can always be rebuilt from the official sources: drop it, run `migrate`
-and `sync`. Section versions are content hashes, so a rebuild gives your consumers the same
-versions.
+The register data needs no backup: it can always be rebuilt from the official sources, and section
+versions are content hashes, so a rebuild gives your consumers the same versions.
+
+**The objections are different.** `search_suppression` is your own data. If it is lost, every
+person who objected silently returns to name search, and no source can restore it. Dropping the
+database, `docker compose down -v` and `migrate down-to 0` all delete it.
+
+- **Back up after every change** (and on a schedule):
+
+  ```sh
+  accquix-register suppress --list > objections.tsv      # compose: docker compose run --rm -T sync suppress --list
+  ```
+
+  The file lists the people who objected. Keep it encrypted (for example with `age` or `gpg`),
+  with restricted access, away from the database. Its last line holds the row count and a
+  checksum; a restore refuses a truncated or altered file.
+- **Rebuild in this order**, so that a suppressed person is never searchable:
+  1. `migrate`;
+  2. `accquix-register suppress --restore objections.tsv`;
+  3. only then `sync` (it builds the search layer without the suppressed subjects) and `serve`.
+
+  In compose: `docker compose up -d postgres migrate`, restore with
+  `docker compose run --rm -T sync suppress --restore - < objections.tsv`, then
+  `docker compose up -d`.
+- A restore only adds rows; it never removes an objection. Test it once before you rely on it.
 
 ## Monitoring
 
@@ -111,7 +147,7 @@ versions.
 ## Upgrades
 
 Pull the new image, run `migrate`, then restart `serve` and `sync`. Migrations are forward-only in
-practice; `migrate down-to` exists for development.
+practice; `migrate down-to` exists for development, and `down-to 0` deletes the objections.
 
 ## Configuration
 

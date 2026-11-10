@@ -18,6 +18,8 @@ Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `N
 | `sync --unblock --source rpo` / `fs:<zoznam>` | Obnoví zdroj po zablokovaní validáciou. |
 | `serve` | HTTP API. |
 | `suppress --subject <IČO> [--undo] [--reason TEXT]` | Vyradí subjekt z vyhľadávania podľa názvu alebo ho vráti. |
+| `suppress --list` | Vypíše všetky námietky vo formáte zálohy. Výstup uchovávajte v súkromí. |
+| `suppress --restore FILE` | Obnoví zálohu (`-` číta štandardný vstup); spustite pred prvým `sync` znova zostavenej databázy. |
 | `openapi` | Vypíše dokument OpenAPI 3.1. |
 | `version` | Vypíše verziu. |
 
@@ -45,6 +47,9 @@ chyba v príkazovom riadku.
 | `REGISTER_RPO_DAILY_MAX_RECORDS` | `20000` | Väčší denný súbor sa odmietne. |
 | `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | Menší nový snapshot zablokuje označovanie chýbajúcich záznamov. |
 | `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: označovanie chýbajúcich nad týmto podielom aktívnych záznamov sa zablokuje. |
+| `REGISTER_RPO_DATE_SKEW_DAYS` | `1` | RPO: súbor, ktorého `exportDate` sa od dátumu v názve líši o viac dní, sa odmietne; dátum po zajtrajšku vždy. |
+| `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS` | `2000000` | RPO: prvý snímok s menším počtom záznamov sa nezverejní. |
+| `REGISTER_FS_SKIP_MIN_ROWS` | `false` | Vypne minimálne počty riadkov veľkých zoznamov (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000). |
 | `REGISTER_FS_MAX_DROP` | podľa zoznamu | Prepíše prah poklesu pre všetky zoznamy (predvolene 0,03 pre `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0,20 pre malé zoznamy). |
 
 ## API

@@ -1,6 +1,6 @@
 ---
 title: Databáza
-description: Roly, spojenia, spravované PostgreSQL a prečo netreba zálohy.
+description: Roly, spojenia, spravované PostgreSQL a jediná tabuľka, ktorú musíte zálohovať.
 ---
 
 ## Roly
@@ -9,21 +9,28 @@ Oddelené roly udržia API len na čítanie:
 
 ```sql
 CREATE ROLE register_migrate LOGIN PASSWORD '…';   -- vlastní schému, spúšťa migrate
-CREATE ROLE register_sync    LOGIN PASSWORD '…';
-CREATE ROLE register_api     LOGIN PASSWORD '…';
+CREATE ROLE register_sync    LOGIN PASSWORD '…';   -- sync a suppress
+CREATE ROLE register_api     LOGIN PASSWORD '…';   -- serve
 
--- po `migrate` ako register_migrate:
-GRANT USAGE ON SCHEMA public TO register_sync, register_api;
-GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO register_sync;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO register_sync;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO register_api;
+ALTER DATABASE register OWNER TO register_migrate;
+GRANT TEMPORARY ON DATABASE register TO register_sync;
 
--- tabuľky pridané neskoršími migráciami dostanú rovnaké práva:
+-- práva na všetko, čo migrate vytvorí, teraz aj v ďalších verziách:
 ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO register_sync;
 ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
+  GRANT USAGE ON SEQUENCES TO register_sync;
+ALTER DEFAULT PRIVILEGES FOR ROLE register_migrate IN SCHEMA public
   GRANT SELECT ON TABLES TO register_api;
+
+-- API nikdy nezapisuje a nekonečný dopyt ukončí aj server:
+ALTER ROLE register_api SET default_transaction_read_only = on;
+ALTER ROLE register_api SET statement_timeout = '10s';
 ```
+
+Spustite to ako správca pred `migrate`. Nasadenie cez docker compose to urobí za vás pri prvom štarte PostgreSQL,
+takže žiadny proces registra sa nepripája ako superpoužívateľ. Na PostgreSQL 17 a 18 pridajte role pre
+synchronizáciu aj právo `MAINTAIN` na tabuľky.
 
 Potom nasmerujte každý režim na jeho rolu:
 
@@ -33,8 +40,8 @@ Potom nasmerujte každý režim na jeho rolu:
 | `REGISTER_SYNC_DATABASE_URL` | `register_sync` | **Priame** (advisory lock, COPY, dočasné tabuľky) |
 | `REGISTER_DATABASE_URL` | `register_api` | Priame alebo transakčný pooler |
 
-Synchronizácia vytvára dočasné tabuľky, preto jej rola potrebuje právo `TEMPORARY` na databázu (predvolene ho má
-`PUBLIC`). Pri spravovaných databázach použite `sslmode=verify-full`.
+Synchronizácia vytvára dočasné tabuľky, preto jej rola potrebuje právo `TEMPORARY` na databázu. Režimu `serve` nikdy
+nedávajte rolu, ktorá môže zapisovať. Pri spravovaných databázach použite `sslmode=verify-full`.
 
 ## Spravovaní poskytovatelia
 
@@ -49,8 +56,20 @@ Synchronizácia vytvára dočasné tabuľky, preto jej rola potrebuje právo `TE
 Asi 2,3 GB dát s indexmi, rastie spolu s registrami (niekoľko percent ročne). Slovník slov pre približné
 vyhľadávanie pridá asi 10 MB.
 
-## Zálohy netreba
+## Zálohujte námietky
 
-Databázu možno vždy znova zostaviť z oficiálnych zdrojov: zmažte ju, spustite `migrate` a `sync`. Verzie častí sú
-odtlačky obsahu, takže po opätovnom zostavení vaši klienti uvidia rovnaké verzie a žiadne falošné zmeny. Vašimi
-vlastnými dátami je len zoznam námietok (`search_suppression`): evidujte ho aj inde alebo zálohujte túto tabuľku.
+Dáta registra zálohu nepotrebujú: vždy ich možno znova zostaviť z oficiálnych zdrojov. Verzie častí sú odtlačky
+obsahu, takže po opätovnom zostavení vaši klienti uvidia rovnaké verzie a žiadne falošné zmeny.
+
+Zoznam námietok (`search_suppression`) je iný: sú to vaše vlastné dáta a žiadny zdroj ich neobnoví. Ak sa stratí,
+každá osoba, ktorá podala námietku, sa potichu vráti do vyhľadávania podľa názvu. Zmazanie databázy,
+`docker compose down -v` aj `migrate down-to 0` ho zmažú.
+
+```sh
+accquix-register suppress --list > objections.tsv        # po každej zmene a pravidelne
+accquix-register suppress --restore objections.tsv       # na znova zostavenej databáze, pred prvým sync
+```
+
+Súbor uchovávajte šifrovaný a mimo databázy: obsahuje zoznam osôb, ktoré podali námietku. Posledný riadok obsahuje
+počet riadkov a kontrolný súčet a obnova odmietne poškodený súbor. Pri opätovnom zostavení spustite `migrate`, potom
+obnovu a až potom `sync` a `serve`.

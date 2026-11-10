@@ -6,8 +6,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/accquix/register/internal/config"
+	"github.com/accquix/register/internal/ingest"
 )
 
 func emptyEnv() config.Env {
@@ -77,5 +79,37 @@ func TestOpenAPIUpToDate(t *testing.T) {
 	}
 	if !bytes.Equal(out.Bytes(), committed) {
 		t.Fatal("api/openapi.yaml is out of date: run `go run ./cmd/accquix-register openapi > api/openapi.yaml`")
+	}
+}
+
+func TestObjectionBackupRoundTrip(t *testing.T) {
+	at := time.Date(2026, 11, 10, 9, 30, 0, 123456000, time.UTC)
+	rows := []ingest.Suppression{
+		{SKey: "99900004", Reason: "ticket 12\twith a tab", CreatedAt: at},
+		{SKey: "r900000004", Origin: "99900004", CreatedAt: at},
+	}
+	var buf bytes.Buffer
+	if err := writeSuppressions(&buf, rows); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readSuppressions(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].SKey != "99900004" || got[0].Reason != "ticket 12 with a tab" || !got[0].CreatedAt.Equal(at) || got[1].Origin != "99900004" {
+		t.Fatalf("round trip: %+v", got)
+	}
+	file := buf.String()
+	cut := file[:strings.LastIndex(strings.TrimRight(file, "\n"), "\n")+1] // without the trailer
+	lines := strings.SplitAfter(file, "\n")
+	for name, damaged := range map[string]string{
+		"no trailer":  cut,
+		"missing row": lines[0] + lines[2],
+		"changed key": strings.Replace(file, "99900004\t\t", "99900005\t\t", 1),
+		"bad key":     "not-a-key\t\t" + at.Format(time.RFC3339Nano) + "\t\n" + lines[2],
+	} {
+		if _, err := readSuppressions(strings.NewReader(damaged)); err == nil {
+			t.Errorf("%s: a damaged backup was accepted", name)
+		}
 	}
 }

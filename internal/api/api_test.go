@@ -81,7 +81,7 @@ func populate(t *testing.T, dsn string) {
 	srv.Put("ds_dphz", testkit.FSZip("ds_dphz", day(0), nil))
 	srv.Put("ds_dphv", testkit.FSZip("ds_dphv", day(0), nil))
 	srv.Put("ds_dpho", testkit.FSZip("ds_dpho", day(0), []testkit.Item{{"IC_DPH": "SK2099900004", "ICO": "99900004", "DAT_ZACATIA": sk(-100)}}))
-	if err := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir()}).Run(ctx); err != nil {
+	if err := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), SkipMinRows: true}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -350,6 +350,37 @@ func TestAPI(t *testing.T) {
 		_, _, m = e.get(t, "/v1/search?q=rybka", true)
 		if !strings.Contains(strings.Join(names(m), "|"), "Strieborná") {
 			t.Fatal("an unsuppressed subject did not come back")
+		}
+	})
+
+	t.Run("an objection is enforced at query time, not only by the search layer", func(t *testing.T) {
+		// The row is written without rebuilding the search layer, as after an interrupted refresh:
+		// the subject's search rows and dictionary words are still there.
+		conn := testkit.Conn(t, dsn)
+		if _, err := conn.Exec(context.Background(), `INSERT INTO search_suppression (skey) VALUES ('99900001')`); err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Exec(context.Background(), `DELETE FROM search_suppression WHERE skey = '99900001'`)
+		for _, qq := range []string{"zlata", "zlata ryb", "rybka"} {
+			if _, _, m := e.get(t, "/v1/search?q="+q(qq), true); strings.Contains(strings.Join(names(m), "|"), "Zlatá") {
+				t.Fatalf("%q returned a suppressed subject", qq)
+			}
+		}
+		fz := start(t, dsn, func(c *api.Config) { c.FuzzyEvery = time.Millisecond })
+		code, _, m := fz.get(t, "/v1/search?mode=fuzzy&q="+q("zlta rybka"), true)
+		if b, _ := json.Marshal(m); code != 200 || strings.Contains(strings.ToLower(string(b)), "zlat") {
+			t.Fatalf("fuzzy search revealed a word that only a suppressed subject uses: %d %s", code, b)
+		}
+	})
+
+	t.Run("a source dated in the future is never fresh", func(t *testing.T) {
+		conn := testkit.Conn(t, dsn)
+		if _, err := conn.Exec(context.Background(), `UPDATE sync_source SET published_as_of = published_as_of + 30 WHERE source = 'rpo'`); err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Exec(context.Background(), `UPDATE sync_source SET published_as_of = published_as_of - 30 WHERE source = 'rpo'`)
+		if code, _, m := e.get(t, "/v1/lookup/99900099", true); code != 503 || m["reason"] != "source_stale" {
+			t.Fatalf("future as-of date: %d %v", code, m)
 		}
 	})
 

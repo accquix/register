@@ -27,6 +27,7 @@ type RPOUnit struct {
 	Open          func() (io.ReadCloser, error)
 	RefreshSearch bool                                                     // update the search layer for touched subjects
 	MarkSeen      bool                                                     // record ids in rpo_seen (reconcile)
+	CheckDate     func(exportDate time.Time) error                         // nil = accept; an error rejects the unit before anything is staged
 	Validate      func(records int) error                                  // nil = accept; an error rejects the unit
 	After         func(ctx context.Context, tx pgx.Tx, r UnitResult) error // runs in the same transaction
 }
@@ -113,6 +114,13 @@ func ApplyRPO(ctx context.Context, conn *pgx.Conn, u RPOUnit) (UnitResult, error
 		return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, err)
 	}
 	res.ExportDate = dec.ExportDate()
+	if u.CheckDate != nil {
+		// The export date becomes src_date, which the order guard compares. A wrong date (above all a
+		// future one) would freeze the rows of this file against every later correction.
+		if err := u.CheckDate(res.ExportDate); err != nil {
+			return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, err)
+		}
+	}
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {

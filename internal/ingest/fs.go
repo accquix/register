@@ -16,8 +16,9 @@ type FSUnit struct {
 	List     fs.List
 	Name     string // checkpoint name, e.g. "fs:ds_dphs:<sha prefix>"
 	SHA256   string
-	Path     string    // local ZIP
-	PrevAsOf time.Time // list date of the version applied before; zero if none
+	Path     string           // local ZIP
+	PrevAsOf time.Time        // list date of the version applied before; zero if none
+	Now      func() time.Time // default time.Now; a list dated after tomorrow is rejected
 	After    func(ctx context.Context, tx pgx.Tx, r FSResult) error
 }
 
@@ -110,6 +111,16 @@ func ApplyFS(ctx context.Context, conn *pgx.Conn, u FSUnit) (FSResult, error) {
 		return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, derr)
 	}
 	res.AsOf, res.Items = dec.AsOf(), dec.Count()
+	now := time.Now
+	if u.Now != nil {
+		now = u.Now
+	}
+	// The list date becomes published_as_of: freshness is measured from it, and a later version
+	// must not be older. A date in the future would make the list look fresh for ever and reject
+	// every correct version after it. One day of tolerance covers time zones.
+	if latest := now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1); res.AsOf.After(latest) {
+		return res, fmt.Errorf("%w: %s: list date %s is in the future", ErrRejected, u.Name, res.AsOf.Format("2006-01-02"))
+	}
 	if !u.PrevAsOf.IsZero() && res.AsOf.Before(u.PrevAsOf) {
 		return res, fmt.Errorf("%w: %s: list date %s is older than the applied %s", ErrRejected, u.Name,
 			res.AsOf.Format("2006-01-02"), u.PrevAsOf.Format("2006-01-02"))
@@ -119,6 +130,11 @@ func ApplyFS(ctx context.Context, conn *pgx.Conn, u FSUnit) (FSResult, error) {
 		return res, err
 	}
 	res.Duplicates = res.Items - res.Distinct
+	// A floor for the large lists: the drop threshold below compares with the rows already stored,
+	// so it cannot protect the first load (or a load after the table was emptied).
+	if res.Distinct < u.List.MinRows {
+		return res, fmt.Errorf("%w: %s: %d rows, fewer than the minimum of %d for this list", ErrRejected, u.Name, res.Distinct, u.List.MinRows)
+	}
 
 	t := targetFor(u.List)
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+t.table+` t WHERE t.absent_since IS NULL AND `+t.scope).Scan(&res.PrevActive); err != nil {

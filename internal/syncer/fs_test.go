@@ -24,7 +24,7 @@ func TestFSLifecycle(t *testing.T) {
 	dsn := testkit.Database(t)
 	conn := testkit.Conn(t, dsn)
 	srv := testkit.NewFSServer(t)
-	s := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir()})
+	s := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), SkipMinRows: true})
 
 	// --- 1. first load of all six lists ---
 	vat := []testkit.Item{
@@ -105,7 +105,7 @@ func TestFSLifecycle(t *testing.T) {
 	if err := syncer.Unblock(ctx, conn, "fs:ds_dsrdp"); err != nil {
 		t.Fatal(err)
 	}
-	loose := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), MaxDrop: 0.2})
+	loose := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), MaxDrop: 0.2, SkipMinRows: true})
 	if err := loose.Run(ctx); err != nil {
 		t.Fatal(err)
 	}

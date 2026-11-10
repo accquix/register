@@ -9,18 +9,32 @@ cd "$(dirname "$0")"
 mkdir -p secrets
 chmod 700 secrets
 umask 022
-if [ ! -f secrets/postgres_password ]; then
-  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > secrets/postgres_password
+
+# Before roles were separated, one superuser URL served every process. Refuse to mix the layouts.
+if [ -f secrets/database_url ] && ! grep -q '//register_api:' secrets/database_url; then
+  echo "secrets/database_url is from the old single-role layout (the API connected as the superuser)." >&2
+  echo "Move the secrets directory away (and remove the pgdata volume, or create the roles by hand:" >&2
+  echo "docs/self-hosting.md, Database roles), then run this script again." >&2
+  exit 1
 fi
-if [ ! -f secrets/database_url ]; then
-  printf 'postgres://register:%s@postgres:5432/register?sslmode=disable' "$(cat secrets/postgres_password)" > secrets/database_url
-fi
+
+random() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+
+# postgres_password is the superuser's: used by initdb and by you, never by the register.
+for name in postgres migrate sync api; do
+  [ -f "secrets/${name}_password" ] || random 32 > "secrets/${name}_password"
+done
+url() { printf 'postgres://register_%s:%s@postgres:5432/register?sslmode=disable' "$1" "$(cat "secrets/$1_password")"; }
+[ -f secrets/migrate_database_url ] || url migrate > secrets/migrate_database_url
+[ -f secrets/sync_database_url ] || url sync > secrets/sync_database_url
+[ -f secrets/database_url ] || url api > secrets/database_url
+
 if [ ! -f secrets/api_keys ]; then
-  key=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  key=$(random 24)
   if command -v sha256sum >/dev/null 2>&1; then hash=$(printf %s "$key" | sha256sum | cut -d' ' -f1)
   else hash=$(printf %s "$key" | shasum -a 256 | cut -d' ' -f1); fi
   printf 'default:%s' "$hash" > secrets/api_keys
   echo "API key (shown once, store it now): $key"
 fi
-chmod 644 secrets/postgres_password secrets/database_url secrets/api_keys
+chmod 644 secrets/*_password secrets/*database_url secrets/api_keys
 echo "secrets ready in $(pwd)/secrets"

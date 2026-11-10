@@ -49,7 +49,9 @@ accquix-register suppress --subject 99900004 --reason "tiket 123"
 accquix-register suppress --subject 99900004 --undo
 ```
 
-Vyradenie sa drží podľa IČO, takže aj nový záznam tej istej osoby v RPO zostane vyradený. Do `--reason`
+Vyradenie sa drží podľa IČO, takže aj nový záznam tej istej osoby v RPO zostane vyradený; platí aj vtedy, keď záznam
+IČO získa alebo stratí. Zoznam po každej zmene zálohujte (`suppress --list`, pozrite
+[Databáza](/sk/self-hosting/database)): sú to jediné dáta, ktoré opätovné zostavenie neobnoví. Do `--reason`
 nezapisujte osobné údaje.
 
 ## Aktualizácie

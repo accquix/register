@@ -37,11 +37,19 @@ type Config struct {
 	RPODailyMaxRecords  int     // REGISTER_RPO_DAILY_MAX_RECORDS, 20000
 	RPOSnapshotMinRatio float64 // REGISTER_RPO_SNAPSHOT_MIN_RATIO, 0.98
 	AbsenceMaxRatio     float64 // REGISTER_ABSENCE_MAX_RATIO, 0.005
+	// RPODateSkewDays is how far a file's exportDate may be from the date in its name
+	// (REGISTER_RPO_DATE_SKEW_DAYS, 1).
+	RPODateSkewDays int
+	// RPOBootstrapMinRecords: a first snapshot with fewer records is not published
+	// (REGISTER_RPO_BOOTSTRAP_MIN_RECORDS, 2000000).
+	RPOBootstrapMinRecords int
 	// FSBaseURL serves the Financial Administration list exports (REGISTER_FS_BASE_URL).
 	FSBaseURL string
 	// FSMaxDrop overrides every FS list's drop threshold when set (REGISTER_FS_MAX_DROP; default:
 	// 0.03 for ds_dsrdp, ds_dphs, ds_iz_ran and 0.20 for the small lists).
 	FSMaxDrop float64
+	// FSSkipMinRows drops the row floors of the large FS lists (REGISTER_FS_SKIP_MIN_ROWS, false).
+	FSSkipMinRows bool
 
 	// serve
 	Listen          string        // REGISTER_LISTEN, ":8080"
@@ -123,6 +131,8 @@ func Load(e Env) (Config, error) {
 		{"REGISTER_DOWNLOAD_CONCURRENCY", &c.DownloadConcurrency, 6},
 		{"REGISTER_RPO_PART_RECORDS", &c.RPOPartRecords, 100_000},
 		{"REGISTER_RPO_DAILY_MAX_RECORDS", &c.RPODailyMaxRecords, 20_000},
+		{"REGISTER_RPO_DATE_SKEW_DAYS", &c.RPODateSkewDays, 1},
+		{"REGISTER_RPO_BOOTSTRAP_MIN_RECORDS", &c.RPOBootstrapMinRecords, 2_000_000},
 	}
 	for _, v := range ints {
 		if *v.dst, err = positiveInt(e.Getenv(v.name), v.def); err != nil {
@@ -150,6 +160,9 @@ func Load(e Env) (Config, error) {
 		if c.FSMaxDrop, err = ratio(v, 0); err != nil {
 			return c, fmt.Errorf("REGISTER_FS_MAX_DROP: %w", err)
 		}
+	}
+	if c.FSSkipMinRows, err = boolVar(e, "REGISTER_FS_SKIP_MIN_ROWS", false); err != nil {
+		return c, err
 	}
 	if err := c.loadServe(e); err != nil {
 		return c, err
