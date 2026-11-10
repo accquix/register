@@ -2,6 +2,21 @@
 
 Thank you for helping. Accquix Register is maintained by Accquix and developed in the open.
 
+## How contributions work
+
+Accquix Register is open source, maintained by Accquix. Bug reports and pull requests are welcome.
+However, the project is developed primarily to support Accquix's infrastructure, and Accquix keeps
+full discretion over its roadmap and over which contributions are accepted.
+
+- **Open an issue before starting a substantial change**, so that we can say whether it fits the
+  project before you spend time on it. Small fixes (typos, an obvious bug with a test) can go
+  straight to a pull request.
+- **We cannot promise that every issue or pull request will get an answer or be merged.**
+- **Forks are welcome.** The Apache-2.0 licence lets you run, change and redistribute your own
+  version.
+- **Security vulnerabilities:** never in a public issue. Follow [SECURITY.md](SECURITY.md).
+- There are no GitHub Discussions; use issues for questions about installation and behaviour.
+
 ## Ground rules
 
 - **Code only, never data.** Never commit register records, dumps, downloaded files, or real names
