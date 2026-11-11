@@ -241,7 +241,7 @@ func (s *RPO) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := s.rebuildIfOwed(ctx, st); err != nil {
+	if err := rebuildIfOwed(ctx, s.conn, s.cfg.Log); err != nil {
 		return err
 	}
 	if st.State == "blocked" {
@@ -273,24 +273,36 @@ func (s *RPO) Run(ctx context.Context) error {
 	return s.handle(ctx, &st, s.daily(ctx, &st, inv))
 }
 
+// RebuildIfOwed rebuilds the search layer when a migration asked for it, under the sync lock. It
+// is for callers that do not run a sync pass (the demo loader); a pass does it by itself.
+func RebuildIfOwed(ctx context.Context, conn *pgx.Conn, log *slog.Logger) error {
+	unlock, err := lock(ctx, conn)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return rebuildIfOwed(ctx, conn, log)
+}
+
 // rebuildIfOwed rebuilds the whole search layer when a schema migration asked for it (migration
 // 00006): a migration can change what is hidden but cannot rebuild the search tables. The API
-// does not serve until this is done. It runs also for a blocked source: it reads only what is
-// already stored.
-func (s *RPO) rebuildIfOwed(ctx context.Context, st State) error {
-	var owed bool
-	if err := s.conn.QueryRow(ctx, `SELECT coalesce((SELECT search_rebuild_pending FROM register_setup WHERE only_row), false)`).Scan(&owed); err != nil {
+// does not serve until this is done. Every sync pass calls it first, whichever source it syncs,
+// also when a source is blocked: it reads only what is already stored.
+func rebuildIfOwed(ctx context.Context, conn *pgx.Conn, log *slog.Logger) error {
+	var owed, published bool
+	if err := conn.QueryRow(ctx, `SELECT coalesce((SELECT search_rebuild_pending FROM register_setup WHERE only_row), false),
+  EXISTS (SELECT 1 FROM sync_source WHERE source = 'rpo' AND published_as_of IS NOT NULL)`).Scan(&owed, &published); err != nil {
 		return err
 	}
 	if !owed {
 		return nil
 	}
-	tx, err := s.conn.Begin(ctx)
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if st.PublishedAsOf != "" {
+	if published {
 		if err := ingest.RebuildSearch(ctx, tx); err != nil {
 			return err
 		}
@@ -301,7 +313,9 @@ func (s *RPO) rebuildIfOwed(ctx context.Context, st State) error {
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	s.cfg.Log.Info("search layer rebuilt after an upgrade")
+	if log != nil {
+		log.Info("search layer rebuilt after an upgrade")
+	}
 	return nil
 }
 

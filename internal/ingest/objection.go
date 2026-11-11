@@ -173,9 +173,10 @@ func RevokeObjection(ctx context.Context, conn *pgx.Conn, id int64) (Coverage, e
 	return c, tx.Commit(ctx)
 }
 
-// ReleaseLink excludes one record from one objection (release true), or withdraws that exclusion
-// (release false). The objection itself and its other links are untouched. A released link stays
-// as a row, so the sync does not link the record again. hiddenNow reports whether the record is
+// ReleaseLink excludes one linked record from one objection (release true), or withdraws that
+// exclusion (release false). The objection itself and its other links are untouched. A released
+// link stays as a row, so the sync does not link the record again. A record that is not linked
+// to the objection is refused. hiddenNow reports whether the record is
 // out of name search afterwards (another objection may still cover it).
 //
 // The record an objection names directly (r<RPO id>) cannot be released: revoke that objection.
@@ -198,19 +199,26 @@ func ReleaseLink(ctx context.Context, conn *pgx.Conn, id, recordID int64, reason
 	case direct:
 		return false, fmt.Errorf("objection #%d names record %d itself: revoke the objection instead", id, recordID)
 	}
+	// Only a link that exists can be released or linked again. A mistyped record id must not
+	// leave an exclusion behind for a record the objection never covered.
+	var releasedNow bool
+	err = tx.QueryRow(ctx, `SELECT released_at IS NOT NULL FROM objection_record WHERE objection_id = $1 AND rpo_id = $2`, id, recordID).Scan(&releasedNow)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, fmt.Errorf("record %d is not linked to objection #%d (see suppress --list --id %d): nothing changed", recordID, id, id)
+	case err != nil:
+		return false, err
+	case release && releasedNow:
+		return false, fmt.Errorf("record %d is already released from objection #%d", recordID, id)
+	case !release && !releasedNow:
+		return false, fmt.Errorf("record %d is not released from objection #%d", recordID, id)
+	}
 	if release {
-		// Also when no link exists yet: the exclusion must be there before a sync sees the record.
-		_, err = tx.Exec(ctx, `INSERT INTO objection_record (objection_id, rpo_id, basis, released_at, released_reason)
-VALUES ($1, $2, 'at_objection', now(), nullif($3, ''))
-ON CONFLICT (objection_id, rpo_id) DO UPDATE SET released_at = now(), released_reason = EXCLUDED.released_reason
-WHERE objection_record.released_at IS NULL`, id, recordID, reason)
+		_, err = tx.Exec(ctx, `UPDATE objection_record SET released_at = now(), released_reason = nullif($3, '')
+WHERE objection_id = $1 AND rpo_id = $2 AND released_at IS NULL`, id, recordID, reason)
 	} else {
-		var tag pgTag
-		tag, err = tx.Exec(ctx, `UPDATE objection_record SET released_at = NULL, released_reason = NULL
+		_, err = tx.Exec(ctx, `UPDATE objection_record SET released_at = NULL, released_reason = NULL
 WHERE objection_id = $1 AND rpo_id = $2 AND released_at IS NOT NULL`, id, recordID)
-		if err == nil && tag.RowsAffected() == 0 {
-			return false, fmt.Errorf("record %d is not released from objection #%d", recordID, id)
-		}
 	}
 	if err != nil {
 		return false, err
@@ -231,8 +239,6 @@ WHERE objection_id = $1 AND rpo_id = $2 AND released_at IS NOT NULL`, id, record
 	}
 	return hiddenNow, tx.Commit(ctx)
 }
-
-type pgTag interface{ RowsAffected() int64 }
 
 // ListObjections returns every objection with its links, revoked ones included, in id order.
 func ListObjections(ctx context.Context, conn *pgx.Conn) ([]Objection, error) {
@@ -272,9 +278,10 @@ FROM objection_record ORDER BY objection_id, rpo_id`)
 }
 
 // RestoreObjections puts exported objections back, with their links and releases, and confirms
-// the installation's objections as restored, in one transaction. It only adds: an objection
-// already present (same key and time) is kept as it is, and none is ever removed, revoked or
-// un-revoked by a restore. It returns how many objections were added.
+// the installation's objections as restored, in one transaction. It only adds: an objection or a
+// link already present is kept exactly as it is, so a restore never removes, revokes or
+// un-revokes an objection and never releases or re-links a record. It returns how many objections
+// were added.
 func RestoreObjections(ctx context.Context, conn *pgx.Conn, list []Objection) (int, error) {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -304,12 +311,15 @@ VALUES ($1, $2, nullif($3, ''), $4, $5) RETURNING id`, ico, rpoID, o.Reason, o.C
 			return 0, err
 		}
 		for _, l := range o.Links {
-			// An existing link wins, except that a release in the backup is kept: restoring must
-			// not bring back a link the operator had excluded.
+			// A link that exists in the database is kept exactly as it is. The database is at
+			// least as new as any backup: if the operator withdrew a release after the backup was
+			// taken, the backup's release must not come back and expose the record again (an
+			// unrelease leaves no trace a backup could carry). A release in the backup applies
+			// only to a link the database does not have, which is the rebuilt-database case: the
+			// links below are inserted before the sync links anything.
 			if _, err := tx.Exec(ctx, `INSERT INTO objection_record (objection_id, rpo_id, basis, source, created_at, released_at, released_reason)
 VALUES ($1, $2, $3, nullif($4, ''), $5, $6, nullif($7, ''))
-ON CONFLICT (objection_id, rpo_id) DO UPDATE SET released_at = EXCLUDED.released_at, released_reason = EXCLUDED.released_reason
-WHERE objection_record.released_at IS NULL AND EXCLUDED.released_at IS NOT NULL`,
+ON CONFLICT (objection_id, rpo_id) DO NOTHING`,
 				id, l.RecordID, l.Basis, l.Source, l.CreatedAt, l.ReleasedAt, l.ReleasedReason); err != nil {
 				return 0, fmt.Errorf("restore: %w", err)
 			}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -518,5 +519,76 @@ func TestRestoreNeverReactivatesARevokedObjection(t *testing.T) {
 	}
 	if n := num(t, fresh, `SELECT count(*) FROM objection_record a JOIN objection o ON o.id = a.objection_id WHERE o.revoked_at IS NOT NULL AND a.basis <> 'at_objection'`); n != 0 {
 		t.Fatalf("the sync added %d links to a revoked objection", n)
+	}
+}
+
+// A restore never changes a link that exists. The operator released a record, took a backup, then
+// withdrew the release: restoring that backup must not release the record again and put the
+// person back into name search (independent review of 9515eb0, finding 1).
+func TestRestoreNeverReleasesAnExistingLink(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	trader := testkit.Trader(4, "99900004", "Ján Fiktívny - Kaderníctvo")
+	second := testkit.Trader(9, "99900004", "Ján Fiktívny - Druhá Prevádzka")
+	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o."), trader, second}, 3)
+	if err := newSync(t, conn, b).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := object(t, conn, "99900004")
+	if _, err := ingest.ReleaseLink(ctx, conn, id, second.ID, "ticket 7", true); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := ingest.ListObjections(ctx, conn) // the backup holds the release
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingest.ReleaseLink(ctx, conn, id, second.ID, "", false); err != nil { // withdrawn after the backup
+		t.Fatal(err)
+	}
+	eq(t, "before the restore", searchKeys(t, conn), []string{"99900001"})
+	if added, err := ingest.RestoreObjections(ctx, conn, backup); err != nil || added != 0 {
+		t.Fatalf("restore: %d %v", added, err)
+	}
+	eq(t, "after the restore: the record is still hidden", searchKeys(t, conn), []string{"99900001"})
+	eq(t, "the link is still unreleased", links(t, conn, id), []string{"900000004 at_objection -", "900000009 at_objection -"})
+
+	// the other direction: the backup is older than a release; the release stays
+	if _, err := ingest.ReleaseLink(ctx, conn, id, second.ID, "ticket 8", true); err != nil {
+		t.Fatal(err)
+	}
+	old := backup
+	for i := range old[0].Links {
+		old[0].Links[i].ReleasedAt = nil
+	}
+	if _, err := ingest.RestoreObjections(ctx, conn, old); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, "a release made after the backup is kept", links(t, conn, id), []string{"900000004 at_objection -", "900000009 at_objection - released"})
+}
+
+// A release needs a link: a mistyped record id changes nothing and says so (finding 3).
+func TestReleaseNeedsALink(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o."), testkit.Trader(4, "99900004", "Ján Fiktívny")}, 3)
+	if err := newSync(t, conn, b).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := object(t, conn, "99900004")
+	for _, record := range []int64{900000001, 900000404} { // another subject's record; a record that does not exist
+		if _, err := ingest.ReleaseLink(ctx, conn, id, record, "typo", true); err == nil || !strings.Contains(err.Error(), "not linked") {
+			t.Fatalf("release of record %d: %v", record, err)
+		}
+	}
+	if n := num(t, conn, `SELECT count(*) FROM objection_record WHERE objection_id = $1`, id); n != 1 {
+		t.Fatalf("a refused release left %d links", n)
+	}
+	if _, err := ingest.ReleaseLink(ctx, conn, id, 900000004, "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ingest.ReleaseLink(ctx, conn, id, 900000004, "", true); err == nil {
+		t.Fatal("releasing twice must fail")
 	}
 }

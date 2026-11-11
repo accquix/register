@@ -116,6 +116,12 @@ route, status, duration and key name only.
 - **Crash safety:** every file is one transaction with a checkpoint; a killed pass resumes where it
   stopped.
 
+## After an upgrade
+
+A migration that changes what is hidden marks a rebuild of the search layer as owed. The API
+answers `503 reason=setup` until it is done. Every sync pass, whichever source it syncs, does it
+first; `accquix-register demo` does it for a demo database.
+
 ## Size limits on source files
 
 A source file is trusted to come from the state, not to be well-formed. A damaged or hostile file

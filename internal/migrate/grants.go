@@ -124,28 +124,43 @@ func Grant(ctx context.Context, dsn string, r Roles) error {
 		}
 		return s
 	}
-	// Rights given to everyone would reach every role, whatever is revoked from it by name.
-	for _, sql := range []string{
-		"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC",
-		"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC",
-	} {
-		if err := exec(sql); err != nil {
+	// The register's own tables and their sequences, nothing else: a shared database may hold
+	// other applications' tables in the same schema, and their rights are not ours to change.
+	own := tables(append(append([]string{}, allTables...), "goose_db_version"))
+	seqRows, err := tx.Query(ctx, `SELECT DISTINCT s.relname FROM pg_class s
+JOIN pg_depend d ON d.objid = s.oid AND d.classid = 'pg_class'::regclass
+JOIN pg_class t ON t.oid = d.refobjid JOIN pg_namespace n ON n.oid = t.relnamespace
+WHERE s.relkind = 'S' AND n.nspname = 'public' AND t.relname = ANY($1) ORDER BY 1`, append(append([]string{}, allTables...), "goose_db_version"))
+	if err != nil {
+		return err
+	}
+	seqNames, err := pgx.CollectRows(seqRows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	revoke := func(who string) error {
+		if err := exec("REVOKE ALL ON " + own + " FROM " + who); err != nil {
 			return err
 		}
+		if len(seqNames) == 0 {
+			return nil
+		}
+		return exec("REVOKE ALL ON SEQUENCE " + tables(seqNames) + " FROM " + who)
+	}
+	// Rights given to everyone would reach every role, whatever is revoked from it by name.
+	if err := revoke("PUBLIC"); err != nil {
+		return err
 	}
 	for _, rg := range matrix(r, version >= 170000) {
 		if rg.role == "" {
 			continue
 		}
 		who := pgx.Identifier{rg.role}.Sanitize()
-		for _, sql := range []string{
-			"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM " + who,
-			"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM " + who,
-			"GRANT USAGE ON SCHEMA public TO " + who,
-		} {
-			if err := exec(sql); err != nil {
-				return err
-			}
+		if err := revoke(who); err != nil {
+			return err
+		}
+		if err := exec("GRANT USAGE ON SCHEMA public TO " + who); err != nil {
+			return err
 		}
 		for _, g := range rg.grants {
 			if err := exec("GRANT " + g.privileges + " ON " + tables(g.tables) + " TO " + who); err != nil {
@@ -166,22 +181,22 @@ func Grant(ctx context.Context, dsn string, r Roles) error {
 
 // checkRoles refuses role names that would make the matrix meaningless or harmful: a role that
 // does not exist, the connecting role or the owner of the tables (revoking from it would lock
-// migrate out of its own schema), a superuser, or a role that inherits rights from another role
-// (what a group holds cannot be revoked from its member).
+// migrate out of its own schema), or a superuser. A membership in another role is not refused
+// here (managed providers create roles with memberships): what a role inherits is judged by
+// verify, which asks for the effective rights, inherited ones included.
 func checkRoles(ctx context.Context, conn *pgx.Conn, r Roles) error {
 	for _, name := range []string{r.API, r.Sync, r.Operator} {
 		if name == "" {
 			continue
 		}
-		var exists, super, self, owner, member bool
+		var exists, super, self, owner bool
 		err := conn.QueryRow(ctx, `SELECT
   EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1),
   coalesce((SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = $1), false),
   $1 = current_user,
   EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_roles o ON o.oid = c.relowner
-          WHERE n.nspname = 'public' AND o.rolname = $1),
-  EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles x ON x.oid = m.member WHERE x.rolname = $1)`, name).
-			Scan(&exists, &super, &self, &owner, &member)
+          WHERE n.nspname = 'public' AND o.rolname = $1 AND c.relname = ANY($2))`, name, append(append([]string{}, allTables...), "goose_db_version")).
+			Scan(&exists, &super, &self, &owner)
 		switch {
 		case err != nil:
 			return err
@@ -191,8 +206,6 @@ func checkRoles(ctx context.Context, conn *pgx.Conn, r Roles) error {
 			return fmt.Errorf("role %q runs migrate or owns the tables: name a separate role for the API, the sync and the operator", name)
 		case super:
 			return fmt.Errorf("role %q is a superuser (or bypasses row security): table rights do not bind it", name)
-		case member:
-			return fmt.Errorf("role %q is a member of another role and inherits its rights: use a role without memberships", name)
 		}
 	}
 	return nil
@@ -220,6 +233,18 @@ func verify(ctx context.Context, tx pgx.Tx, r Roles) error {
 	deny(r.Sync, "the sync may only add links", "UPDATE, DELETE, TRUNCATE", "objection_record")
 	deny(r.Operator, "the operator must not write register data", write, join(mirror, stage, state)...)
 	deny(r.Operator, "an objection is never deleted", "DELETE, TRUNCATE", "objection", "objection_record")
+	// The sync reads which keys are objected, never why.
+	if r.Sync != "" {
+		for table, column := range map[string]string{"objection": "reason", "objection_record": "released_reason"} {
+			var held bool
+			if err := tx.QueryRow(ctx, `SELECT has_column_privilege($1, $2, $3, 'SELECT')`, r.Sync, "public."+table, column).Scan(&held); err != nil {
+				return err
+			}
+			if held {
+				return fmt.Errorf("role %q can read %s.%s: the sync must not see the reasons of objections", r.Sync, table, column)
+			}
+		}
+	}
 	for _, c := range checks {
 		held := false
 		if err := tx.QueryRow(ctx, `SELECT has_table_privilege($1, $2, $3)`, c.role, "public."+c.table, c.privileges).Scan(&held); err != nil {
@@ -232,7 +257,7 @@ func verify(ctx context.Context, tx pgx.Tx, r Roles) error {
 			}
 		}
 		if held {
-			return fmt.Errorf("role %q still holds one of %s on %s (%s): revoke what it holds through other grants, then run migrate again", c.role, c.privileges, c.table, c.why)
+			return fmt.Errorf("role %q still holds one of %s on %s (%s). It has the right through another grant or through a role it is a member of (a role created in a provider's console often is): create the role with SQL, without memberships, or revoke the other grant, then run migrate again", c.role, c.privileges, c.table, c.why)
 		}
 	}
 	return nil

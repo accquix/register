@@ -59,13 +59,26 @@ func TestSeparateRoles(t *testing.T) {
 			t.Fatalf("%s must be refused", why)
 		}
 	}
-	if _, err := admin.Exec(ctx, "GRANT "+group+" TO "+syncRole); err != nil {
+	// A membership alone is fine (managed providers create roles with memberships). What counts
+	// is what the role inherits: a group that can read objections makes the API role unfit, and
+	// that is found by asking for the effective rights.
+	if _, err := admin.Exec(ctx, "GRANT "+group+" TO "+apiRole); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: syncRole, Operator: opRole}); err == nil || !strings.Contains(err.Error(), "member of another role") {
-		t.Fatalf("a role with a membership must be refused, got %v", err)
+	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: syncRole, Operator: opRole}); err != nil {
+		t.Fatalf("a harmless membership must be accepted, got %v", err)
 	}
-	if _, err := admin.Exec(ctx, "REVOKE "+group+" FROM "+syncRole); err != nil {
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON objection TO "+group); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: syncRole, Operator: opRole}); err == nil || !strings.Contains(err.Error(), "member of") {
+		t.Fatalf("a role that inherits a forbidden right must be refused, got %v", err)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE ALL ON objection FROM "+group+"; REVOKE "+group+" FROM "+apiRole); err != nil {
+		t.Fatal(err)
+	}
+	// Tables of another application in the same schema are not touched.
+	if _, err := admin.Exec(ctx, `CREATE TABLE other_app (x int); GRANT SELECT ON other_app TO PUBLIC`); err != nil {
 		t.Fatal(err)
 	}
 	// A right given to everyone would reach the API role whatever is revoked from it by name:
@@ -76,9 +89,15 @@ func TestSeparateRoles(t *testing.T) {
 	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: syncRole, Operator: opRole}); err != nil {
 		t.Fatalf("grants after a PUBLIC grant: %v", err)
 	}
-	var leaked bool
-	if err := admin.QueryRow(ctx, `SELECT has_table_privilege($1, 'objection', 'SELECT, UPDATE')`, apiRole).Scan(&leaked); err != nil || leaked {
+	var leaked, otherKept bool
+	if err := admin.QueryRow(ctx, `SELECT has_table_privilege($1, 'objection', 'SELECT, UPDATE'), has_table_privilege($1, 'other_app', 'SELECT')`, apiRole).Scan(&leaked, &otherKept); err != nil || leaked {
 		t.Fatalf("the API role still reaches objection through PUBLIC: %v %v", leaked, err)
+	}
+	if !otherKept {
+		t.Fatal("migrate revoked a right on another application's table")
+	}
+	if _, err := admin.Exec(ctx, `DROP TABLE other_app`); err != nil {
+		t.Fatal(err)
 	}
 	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: me}); err == nil {
 		t.Fatal("the owner named as a role must be refused again")

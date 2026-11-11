@@ -136,6 +136,8 @@ jobs:
           must_fail database_url "create table t (x int)"
           must_fail database_url "copy (select 1) to program 'id'"
           must_fail sync_database_url "insert into objection (ico) values ('99900001')"
+          must_fail sync_database_url "select reason from objection"
+          must_fail sync_database_url "select released_reason from objection_record"
           must_fail sync_database_url "update register_setup set objections_confirmed_at = now() where only_row"
           must_fail operator_database_url "update rpo_record set name = 'x' where id = 1"
           if docker run --rm --network accquix-register_default postgres:18 psql "postgres://register_api:wrong@postgres:5432/register?sslmode=disable" -c 'select 1'; then

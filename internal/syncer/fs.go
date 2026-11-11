@@ -72,6 +72,9 @@ func (s *FS) Run(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	if err := rebuildIfOwed(ctx, s.conn, s.cfg.Log); err != nil {
+		return err
+	}
 	var errs []error
 	for _, l := range s.cfg.Lists {
 		if err := s.one(ctx, l); err != nil {

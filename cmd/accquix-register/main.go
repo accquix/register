@@ -60,7 +60,7 @@ modes:
   suppress --undo --id N          revoke one objection (or --undo --subject ICO when it has one)
   suppress --list [--id N]        print every objection; with --id, the records it covers and why
   suppress --release --id N --record R [--reason TEXT]
-                                  exclude one record from an objection (a wrong link); it stays
+                                  exclude one linked record from an objection (a wrong link); it stays
                                   excluded until --unrelease --id N --record R
   suppress --export --output FILE [--overwrite]
                                   write the backup of the objections

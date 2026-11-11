@@ -72,6 +72,11 @@ func Load(ctx context.Context, conn *pgx.Conn, workDir string, log *slog.Logger)
 	}
 	set := Dataset(time.Now().UTC())
 	if demo && complete {
+		// A demo database that outlived an upgrade may owe a search rebuild (migration 00006). The
+		// sync refuses a demo database, so nothing else would do it and the API would stay at 503.
+		if err := syncer.RebuildIfOwed(ctx, conn, log); err != nil {
+			return Summary{}, fmt.Errorf("demo: rebuild the search layer: %w", err)
+		}
 		return Summary{Subjects: len(set.Records), AlreadyLoaded: true}, nil
 	}
 	// Mark first: a load that dies half-way still leaves a database that says it is a demo.

@@ -113,6 +113,18 @@ Set `REGISTER_MIGRATE_DATABASE_URL`, `REGISTER_SYNC_DATABASE_URL`,
 give `serve` a role that can write. With a single role for everything, leave the
 `REGISTER_DB_ROLE_*` variables unset: `migrate` then grants nothing.
 
+`migrate` checks what it granted. It refuses a role that owns the tables, is a superuser, or
+still holds a right it must not have, and it says which. A role may be a member of another role,
+but it inherits that role's rights: a role created in a provider's console is often a member of an
+administrative role (on Neon, of `neon_superuser`) and is then refused. Create the three roles
+with SQL, as above. `migrate` changes rights only on the register's own tables, so other tables in
+the same schema are left alone.
+
+**Supabase:** tables in the `public` schema are exposed through the project's Data API to the
+`anon` and `authenticated` roles by default. Keep the register in a project of its own, or switch
+the Data API off for it, and check that those roles hold no rights on the register's tables,
+above all on `objection`.
+
 PostgreSQL 16, 17 and 18 are tested. On 17 and 18 `migrate` also grants `MAINTAIN` to the sync
 role, so that it can `ANALYZE` the search tables after a rebuild; on 16 autovacuum does that.
 
@@ -160,7 +172,8 @@ request.
   silent one: the link shows in the log and in `suppress --list --id <N>` with the file that
   caused it.
 - `suppress --release --id <N> --record <R> --reason <ticket>` excludes that one record from the
-  objection. The exclusion stays on record, so the next sync does not link the record again, also
+  objection. The record must be linked to it (`suppress --list --id <N>`); any other record id is
+  refused. The exclusion stays on record, so the next sync does not link the record again, also
   when a later file repeats the mistake. `suppress --unrelease --id <N> --record <R>` withdraws
   it. The objection and its other links are untouched.
 - `suppress --undo --id <N>` revokes one objection and nothing else, and says how many of its
@@ -196,8 +209,9 @@ accquix-register suppress --export --output objections.tsv --overwrite  # replac
 **Rebuilding the database**
 
 1. `migrate`;
-2. `accquix-register suppress --restore objections.tsv` (it only adds; it never removes or
-   revokes an objection);
+2. `accquix-register suppress --restore objections.tsv` (it only adds: an objection or a link
+   that the database already has is kept exactly as it is, so a restore never revokes an
+   objection and never releases a record);
 3. `sync` and `serve`.
 
 The register enforces this: until the restore (or, on a new installation, `suppress --init-empty`)

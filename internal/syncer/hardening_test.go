@@ -553,3 +553,38 @@ func TestSearchIsRebuiltAfterAnUpgrade(t *testing.T) {
 		t.Fatal("the dictionary kept words of the stale rows")
 	}
 }
+
+// The rebuild owed after an upgrade is done by any sync pass, also one that syncs only the FS
+// lists: a deployment that schedules the sources separately must not stay at 503 for ever
+// (independent review, finding 5).
+func TestOwedRebuildIsDoneByAnFSOnlyPass(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o.")}, 3)
+	if err := newSync(t, conn, b).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `DELETE FROM search_name WHERE skey = '99900001'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE register_setup SET search_rebuild_pending = true WHERE only_row`); err != nil {
+		t.Fatal(err)
+	}
+	srv := testkit.NewFSServer(t) // no lists published: every list fails to download, the rebuild still runs
+	_ = syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), SkipMinRows: true}).Run(ctx)
+	eq(t, "search after an FS-only pass", strs(t, conn, `SELECT skey FROM search_name`), []string{"99900001"})
+	if n := num(t, conn, `SELECT count(*) FROM register_setup WHERE search_rebuild_pending`); n != 0 {
+		t.Fatal("the rebuild is still marked as owed")
+	}
+	// and by the helper the demo loader uses
+	if _, err := conn.Exec(ctx, `UPDATE register_setup SET search_rebuild_pending = true WHERE only_row`); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncer.RebuildIfOwed(ctx, conn, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := num(t, conn, `SELECT count(*) FROM register_setup WHERE search_rebuild_pending`); n != 0 {
+		t.Fatal("RebuildIfOwed left the rebuild owed")
+	}
+}
