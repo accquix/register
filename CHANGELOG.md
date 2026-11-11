@@ -5,7 +5,7 @@ Every release of Accquix Register, newest first. The format follows
 [Semantic Versioning](https://semver.org). What counts as a breaking change, and how a change is
 announced, is in the [stability policy](docs/stability.md).
 
-## [Unreleased] — 1.0.0-rc.1
+## [1.0.0-rc.1] — 2026-11-11
 
 The first release candidate. The contracts below are frozen for 1.0.0: between this candidate and
 the release they change only to fix a defect. Verified on the real data through 2026-11-11; the
