@@ -112,3 +112,39 @@ jobs:
         if: failure()
         working-directory: deploy/compose
         run: docker compose logs
+
+  paas-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "start the environment-only stack (no sync: no downloads in CI)"
+        working-directory: deploy/paas
+        run: |
+          for v in POSTGRES_PASSWORD REGISTER_MIGRATE_PASSWORD REGISTER_SYNC_PASSWORD REGISTER_OPERATOR_PASSWORD REGISTER_API_PASSWORD; do
+            echo "$v=$(openssl rand -hex 32)" >> .env
+          done
+          echo "REGISTER_API_KEYS=default:$(printf %s ci-key | sha256sum | cut -d' ' -f1)" >> .env
+          echo "REGISTER_SETUP_COMMAND=suppress --init-empty" >> .env
+          docker compose up -d --build postgres roles migrate setup serve
+          for _ in $(seq 1 60); do test "$(docker compose ps -a setup --format '{{.State}}')" = exited && break; sleep 2; done
+          test "$(docker compose ps -a roles --format '{{.ExitCode}}')" = 0
+          test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = 0
+          test "$(docker compose ps -a setup --format '{{.ExitCode}}')" = 0
+          test "$(docker compose exec -T postgres psql -U postgres -d register -At -c 'select objections_confirmed_as from register_setup')" = new
+          test "$(docker compose exec -T postgres psql -U postgres -d register -At -c "select count(*) from pg_roles where rolname like 'register\_%' and (rolsuper or rolcreaterole or rolcreatedb or rolbypassrls)")" = 0
+          code() { docker run --rm --network accquix-register_default curlimages/curl:8.11.1 -s -o /dev/null -w '%{http_code}' "$@"; }
+          for _ in $(seq 1 30); do test "$(code http://serve:8080/livez)" = 200 && break; sleep 2; done
+          test "$(code http://serve:8080/livez)" = 200
+          test "$(code http://serve:8080/readyz)" = 503
+          test "$(code 'http://serve:8080/v1/search?q=x')" = 401
+      - name: "a leftover setup command fails instead of confirming twice; roles rerun cleanly"
+        working-directory: deploy/paas
+        run: |
+          docker compose up -d roles setup
+          for _ in $(seq 1 30); do test "$(docker compose ps -a setup --format '{{.State}}')" = exited && break; sleep 2; done
+          test "$(docker compose ps -a setup --format '{{.ExitCode}}')" = 1
+          test "$(docker compose ps -a roles --format '{{.ExitCode}}')" = 0
+      - name: logs on failure
+        if: failure()
+        working-directory: deploy/paas
+        run: docker compose logs

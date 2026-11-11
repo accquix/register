@@ -1,0 +1,130 @@
+# Accquix Register for Docker-Compose platforms (Coolify, Dokploy, Portainer stacks and similar).
+#
+# The same services and database roles as deploy/compose/compose.yaml, configured only through
+# environment variables, so the platform's own settings screen holds every secret. See
+# site/docs/self-hosting/paas.mdx. Required variables (use long random hex values, for example
+# `openssl rand -hex 32`; they go into connection URLs unescaped):
+#   POSTGRES_PASSWORD              the superuser: used only by the one-shot `roles` service
+#   REGISTER_MIGRATE_PASSWORD      register_migrate: owns the schema
+#   REGISTER_SYNC_PASSWORD         register_sync: writes the mirror
+#   REGISTER_OPERATOR_PASSWORD     register_operator: changes the objections
+#   REGISTER_API_PASSWORD          register_api: reads the published data
+#   REGISTER_API_KEYS              name:sha256hex,...  hashes of the API keys
+#
+# The API answers 503 reason=setup until the objections of the installation are confirmed. On
+# the first deployment set REGISTER_SETUP_COMMAND="suppress --init-empty", deploy once, then
+# remove the variable again (never leave it set: after a rebuild it would confirm "no
+# objections" without anyone checking).
+name: accquix-register
+
+x-register: &register
+  image: ${REGISTER_IMAGE:-accquix-register:local}
+  build:
+    context: ../..
+    args:
+      VERSION: ${REGISTER_VERSION:-dev}
+  restart: unless-stopped
+
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: register
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d register"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # Creates or updates the four roles on every deployment (idempotent; a changed password in the
+  # settings takes effect here). It is the only service that connects as the superuser.
+  roles:
+    image: postgres:18
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      MIGRATE_PW: ${REGISTER_MIGRATE_PASSWORD:?set REGISTER_MIGRATE_PASSWORD}
+      SYNC_PW: ${REGISTER_SYNC_PASSWORD:?set REGISTER_SYNC_PASSWORD}
+      OPERATOR_PW: ${REGISTER_OPERATOR_PASSWORD:?set REGISTER_OPERATOR_PASSWORD}
+      API_PW: ${REGISTER_API_PASSWORD:?set REGISTER_API_PASSWORD}
+    configs:
+      - source: roles_sql
+        target: /roles.sql
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        psql -h postgres -U postgres -d register -v ON_ERROR_STOP=1 -v db=register
+        -v migrate_pw="$$MIGRATE_PW" -v sync_pw="$$SYNC_PW"
+        -v operator_pw="$$OPERATOR_PW" -v api_pw="$$API_PW" -f /roles.sql
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate:
+    <<: *register
+    command: ["migrate"]
+    environment:
+      REGISTER_MIGRATE_DATABASE_URL: "postgres://register_migrate:${REGISTER_MIGRATE_PASSWORD}@postgres:5432/register?sslmode=disable"
+      REGISTER_DB_ROLE_API: register_api
+      REGISTER_DB_ROLE_SYNC: register_sync
+      REGISTER_DB_ROLE_OPERATOR: register_operator
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    restart: "no"
+    depends_on:
+      roles:
+        condition: service_completed_successfully
+
+  # Runs one operator command per deployment, then exits. Harmless by default (`version`).
+  setup:
+    <<: *register
+    entrypoint: ["/usr/local/bin/accquix-register"]
+    command: ${REGISTER_SETUP_COMMAND:-version}
+    environment:
+      REGISTER_OPERATOR_DATABASE_URL: "postgres://register_operator:${REGISTER_OPERATOR_PASSWORD}@postgres:5432/register?sslmode=disable"
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  sync:
+    <<: *register
+    command: ["sync", "--every", "${REGISTER_SYNC_EVERY:-1h}"]
+    environment:
+      REGISTER_SYNC_DATABASE_URL: "postgres://register_sync:${REGISTER_SYNC_PASSWORD}@postgres:5432/register?sslmode=disable"
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    volumes:
+      - work:/var/lib/accquix-register
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  serve:
+    <<: *register
+    command: ["serve"]
+    environment:
+      REGISTER_DATABASE_URL: "postgres://register_api:${REGISTER_API_PASSWORD}@postgres:5432/register?sslmode=disable"
+      REGISTER_API_KEYS: ${REGISTER_API_KEYS:?set REGISTER_API_KEYS}
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+      REGISTER_SEARCH_FUZZY: ${REGISTER_SEARCH_FUZZY:-true}
+    # The platform's proxy routes the domain to this port; no port is published on the host.
+    expose:
+      - "8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+configs:
+  roles_sql:
+    file: ../compose/initdb/roles.sql.in
+
+volumes:
+  pgdata:
+  work:
