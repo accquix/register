@@ -1,0 +1,26 @@
+---
+title: Kandidát na vydanie 1.0.0-rc.1
+type: changelog
+date: 2026-11-11
+draft: true
+description: Prvý kandidát na vydanie. Kontrakty sú pre 1.0.0 zmrazené.
+changelog:
+  category: Kandidát na vydanie
+---
+
+Prvé vydanie s obrazom a zmrazeným kontraktom. Medzi týmto kandidátom a 1.0.0 sa API, nástroje MCP, príkazový riadok
+a konfigurácia menia len kvôli oprave chyby. Pozri [Verzie a stabilita](/sk/api/stability).
+
+- **Demo režim**: skutočné API nad 180 fiktívnymi subjektmi za pár sekúnd, bez sťahovania.
+  Pozri [Vyskúšajte demo](/sk/quickstart#vyskúšajte-demo).
+- **Ochrana pred preťažením**: inštancia na hranici výkonu ďalej odpovedá a nadbytok hneď odmietne s `503` a
+  `reason: overloaded`. Pool spojení API má teraz predvolene 10 spojení.
+- **Otestované na spravovanom PostgreSQL**: kompatibilita a výkon na PlanetScale Postgres s reálnymi dátami. Pozri
+  [PlanetScale Postgres](/sk/self-hosting/planetscale).
+- **AI agenti**: MCP endpoint len na čítanie a prompty na kopírovanie na spustenie a integráciu registra.
+- **Úplné adresy** pri každom výsledku vyhľadávania, podľa názvu aj podľa identifikátora.
+- **Bezpečnejšia prevádzka**: `serve` sa nespustí na zastaranej schéme; položky zoznamov bez identifikátora sa
+  vynechajú a spočítajú namiesto blokovania zoznamu.
+
+Posledná kontrola pred 1.0.0 je prvé mesačné porovnanie s novým snapshotom RPO okolo 5. decembra 2026. Úplný zoznam
+je v `CHANGELOG.md` v repozitári.

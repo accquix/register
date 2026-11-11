@@ -27,7 +27,9 @@ their operators).
 
 ## Supported versions
 
-Security fixes go to the latest release.
+Security fixes go to the latest MINOR release of the current MAJOR version, and for 6 months after a
+new MAJOR release also to the latest MINOR release of the previous one. See the
+[stability policy](docs/stability.md).
 
 ## No telemetry
 

@@ -13,6 +13,7 @@
 | [publication-checklist.md](publication-checklist.md) | GitHub settings and checks for making the repository public |
 | [measurement-spike.md](measurement-spike.md) | The measurement plan and pass thresholds |
 | [spike-results.md](spike-results.md) | Measured results of the spike (2026-11-10) and the proposed design changes |
+| [stability.md](stability.md) | The stability policy: versions, what is a contract, breaking changes, deprecation (D43) |
 | [managed-postgres-results.md](managed-postgres-results.md) | Compatibility and capacity on PlanetScale Postgres with the real data (2026-11-11, OQ-21) |
 
 These are the design and project documents. The user-facing documentation site (English and Slovak, with the API

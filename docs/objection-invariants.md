@@ -7,7 +7,7 @@ D33, D42), not a code change. Each rule names the test that fails when it breaks
 
 **What it is for.** A natural person can ask to be left out of *name search*. Exact lookup by
 identifier is not affected (D26). Whether an operator must grant a given request is a legal
-question for the operator (OQ-41); the register only provides the mechanism.
+question for the operator (D48); the register only provides the mechanism.
 
 ## Terms
 
