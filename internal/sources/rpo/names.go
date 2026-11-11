@@ -43,9 +43,15 @@ func calendarDate(s string) (time.Time, bool) {
 }
 
 // Classify sorts a bucket listing into daily files and snapshots. Unknown keys are ignored; keys
-// with an impossible date are set aside in Invalid.
-func Classify(objs []Object) Inventory {
+// with an impossible date, or a date after notAfter (zero: no limit), are set aside in Invalid.
+// A file named for a day that has not come cannot be real, and if it were used, a snapshot named
+// 9999-12-31 would be "the newest" for ever and block the source until it left the bucket.
+func Classify(objs []Object, notAfter time.Time) Inventory {
 	inv := Inventory{Dailies: map[string]Object{}, Snapshots: map[string]*Snapshot{}}
+	calendarDate := func(s string) (time.Time, bool) {
+		d, ok := calendarDate(s)
+		return d, ok && (notAfter.IsZero() || !d.After(notAfter))
+	}
 	snap := func(day string) *Snapshot {
 		d, ok := calendarDate(day)
 		if !ok {

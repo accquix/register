@@ -288,7 +288,7 @@ func attribution(isDemo bool) []string {
 	return lookup.Attribution
 }
 
-const setupDetail = "the operator has not confirmed the objections of this installation (suppress --restore or suppress --init-empty)"
+const setupDetail = "the instance is not set up: the operator has not confirmed its objections (suppress --restore or suppress --init-empty), or the search layer is being rebuilt after an upgrade (done by the next sync pass)"
 
 func dbError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {

@@ -26,8 +26,9 @@ const DefaultBucketURL = "https://frkqbrydxwdp.compat.objectstorage.eu-frankfurt
 type Bucket struct {
 	BaseURL    string
 	HTTP       *http.Client
-	Retries    int           // per download; default 4
-	RetryDelay time.Duration // first backoff; default 2 s, doubled each time
+	Retries    int              // per download; default 4
+	RetryDelay time.Duration    // first backoff; default 2 s, doubled each time
+	Now        func() time.Time // default time.Now; files named for a later day than tomorrow are ignored
 }
 
 // NewBucket returns a client for baseURL.
@@ -94,7 +95,12 @@ func (b *Bucket) Inventory(ctx context.Context) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
-	return Classify(append(daily, init...)), nil
+	now := time.Now
+	if b.Now != nil {
+		now = b.Now
+	}
+	// one day of tolerance: the publisher's clock and time zone
+	return Classify(append(daily, init...), now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)), nil
 }
 
 // ReadManifest returns the part file names a snapshot manifest lists.

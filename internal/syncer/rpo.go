@@ -94,6 +94,9 @@ type RPO struct {
 // NewRPO returns the RPO sync over a direct (non-pooled) connection.
 func NewRPO(conn *pgx.Conn, cfg RPOConfig) *RPO {
 	cfg.defaults()
+	if cfg.Bucket != nil && cfg.Bucket.Now == nil {
+		cfg.Bucket.Now = cfg.Now // one clock for "is this file name in the future?"
+	}
 	return &RPO{cfg: cfg, conn: conn}
 }
 
@@ -238,6 +241,9 @@ func (s *RPO) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.rebuildIfOwed(ctx, st); err != nil {
+		return err
+	}
 	if st.State == "blocked" {
 		return fmt.Errorf("%w: %s", ErrBlocked, st.Diagnostic)
 	}
@@ -249,7 +255,7 @@ func (s *RPO) Run(ctx context.Context) error {
 		return err
 	}
 	if len(inv.Invalid) > 0 {
-		s.cfg.Log.Warn("rpo: files with an impossible date in their name are ignored", "count", len(inv.Invalid), "first", inv.Invalid[0])
+		s.cfg.Log.Warn("rpo: files with an impossible or future date in their name are ignored", "count", len(inv.Invalid), "first", inv.Invalid[0])
 	}
 	switch st.State {
 	case "empty", "bootstrap":
@@ -265,6 +271,38 @@ func (s *RPO) Run(ctx context.Context) error {
 		}
 	}
 	return s.handle(ctx, &st, s.daily(ctx, &st, inv))
+}
+
+// rebuildIfOwed rebuilds the whole search layer when a schema migration asked for it (migration
+// 00006): a migration can change what is hidden but cannot rebuild the search tables. The API
+// does not serve until this is done. It runs also for a blocked source: it reads only what is
+// already stored.
+func (s *RPO) rebuildIfOwed(ctx context.Context, st State) error {
+	var owed bool
+	if err := s.conn.QueryRow(ctx, `SELECT coalesce((SELECT search_rebuild_pending FROM register_setup WHERE only_row), false)`).Scan(&owed); err != nil {
+		return err
+	}
+	if !owed {
+		return nil
+	}
+	tx, err := s.conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if st.PublishedAsOf != "" {
+		if err := ingest.RebuildSearch(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE register_setup SET search_rebuild_pending = false WHERE only_row`); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.cfg.Log.Info("search layer rebuilt after an upgrade")
+	return nil
 }
 
 // handle turns a validation rejection into the blocked state.

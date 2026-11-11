@@ -105,15 +105,17 @@ func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 // (restored from a backup, or declared a new installation). Until then the API does not serve:
 // an empty database cannot tell a first installation from one that lost its objections.
 // Setup reports whether the objections are confirmed, and whether the database is a demo (D41).
+// A search rebuild that is owed after an upgrade (migration 00006) counts as not confirmed: the
+// search layer may still show what the new rules hide.
 func (s *Store) Setup(ctx context.Context) (confirmed, demo bool, err error) {
-	err = s.Pool.QueryRow(ctx, `SELECT coalesce(objections_confirmed_at IS NOT NULL, false), coalesce(demo_since IS NOT NULL, false)
+	err = s.Pool.QueryRow(ctx, `SELECT coalesce(objections_confirmed_at IS NOT NULL AND NOT search_rebuild_pending, false), coalesce(demo_since IS NOT NULL, false)
 FROM (SELECT 1) one LEFT JOIN register_setup ON only_row`).Scan(&confirmed, &demo)
 	return confirmed, demo, err
 }
 
 func (s *Store) ObjectionsConfirmed(ctx context.Context) (bool, error) {
 	var ok bool
-	err := s.Pool.QueryRow(ctx, `SELECT coalesce((SELECT objections_confirmed_at IS NOT NULL FROM register_setup WHERE only_row), false)`).Scan(&ok)
+	err := s.Pool.QueryRow(ctx, `SELECT coalesce((SELECT objections_confirmed_at IS NOT NULL AND NOT search_rebuild_pending FROM register_setup WHERE only_row), false)`).Scan(&ok)
 	return ok, err
 }
 

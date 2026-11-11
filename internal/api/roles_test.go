@@ -39,6 +39,53 @@ func TestSeparateRoles(t *testing.T) {
 	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: apiRole}); err == nil {
 		t.Fatal("one role named twice must be refused")
 	}
+	// Role names that would make the matrix meaningless are refused, and nothing changes
+	// (review findings D6 and D7).
+	admin := testkit.Conn(t, dsn)
+	var me string
+	if err := admin.QueryRow(ctx, `SELECT current_user`).Scan(&me); err != nil {
+		t.Fatal(err)
+	}
+	group := apiRole + "_grp"
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+group); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+group) })
+	for why, roles := range map[string]migrate.Roles{
+		"the role that runs migrate and owns the tables": {API: me},
+		"a role that does not exist":                     {API: "reg_t_missing"},
+	} {
+		if err := migrate.Grant(ctx, dsn, roles); err == nil {
+			t.Fatalf("%s must be refused", why)
+		}
+	}
+	if _, err := admin.Exec(ctx, "GRANT "+group+" TO "+syncRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: syncRole, Operator: opRole}); err == nil || !strings.Contains(err.Error(), "member of another role") {
+		t.Fatalf("a role with a membership must be refused, got %v", err)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE "+group+" FROM "+syncRole); err != nil {
+		t.Fatal(err)
+	}
+	// A right given to everyone would reach the API role whatever is revoked from it by name:
+	// migrate takes it away.
+	if _, err := admin.Exec(ctx, `GRANT SELECT, UPDATE ON objection TO PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: apiRole, Sync: syncRole, Operator: opRole}); err != nil {
+		t.Fatalf("grants after a PUBLIC grant: %v", err)
+	}
+	var leaked bool
+	if err := admin.QueryRow(ctx, `SELECT has_table_privilege($1, 'objection', 'SELECT, UPDATE')`, apiRole).Scan(&leaked); err != nil || leaked {
+		t.Fatalf("the API role still reaches objection through PUBLIC: %v %v", leaked, err)
+	}
+	if err := migrate.Grant(ctx, dsn, migrate.Roles{API: me}); err == nil {
+		t.Fatal("the owner named as a role must be refused again")
+	}
+	if _, err := admin.Exec(ctx, `SELECT 1 FROM goose_db_version LIMIT 1`); err != nil {
+		t.Fatalf("a refused grant took the owner's own rights: %v", err)
+	}
 	owner := testkit.Conn(t, dsn)
 	// every table and view of the schema is in the matrix (or is goose's own table)
 	var missing []string

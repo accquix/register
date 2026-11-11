@@ -262,3 +262,65 @@ INSERT INTO objection_record (objection_id, rpo_id) VALUES (1, 900000004), (1, 9
 		t.Fatalf("links after down and up: %d %v", n, err)
 	}
 }
+
+// Migration 00006: a published database owes a search rebuild (a new one does not), and snapshot
+// rows ordered by a later date than the snapshot they came from are put back (finding D11).
+func TestUpgradeOwesARebuildAndFixesOrderDates(t *testing.T) {
+	ctx := context.Background()
+	fresh := testDatabase(t)
+	if _, err := Up(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	c, err := pgx.Connect(ctx, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(ctx)
+	var owed bool
+	if err := c.QueryRow(ctx, `SELECT search_rebuild_pending FROM register_setup`).Scan(&owed); err != nil || owed {
+		t.Fatalf("a new database owes no rebuild: %v %v", owed, err)
+	}
+
+	dsn := testDatabase(t)
+	p, db, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	c2, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c2.Close(ctx)
+	if _, err := c2.Exec(ctx, `
+INSERT INTO sync_source (source, state, base_snapshot, applied_through, published_as_of) VALUES ('rpo', 'daily', '2026-11-07', '2026-11-09', '2026-11-09');
+INSERT INTO rpo_record (id, kind, source_as_of, src_date, src_rank, row_hash) VALUES
+  (900000001, 'other', '2026-11-08', '2026-11-08', 1, '\x00'),  -- a snapshot row stamped a day late
+  (900000002, 'other', '2026-11-07', '2026-11-07', 1, '\x00'),  -- a snapshot row in order
+  (900000003, 'other', '2026-11-09', '2026-11-09', 0, '\x00')`); err != nil { // a daily row
+		t.Fatal(err)
+	}
+	if _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.QueryRow(ctx, `SELECT search_rebuild_pending FROM register_setup`).Scan(&owed); err != nil || !owed {
+		t.Fatalf("a published database owes a rebuild after the upgrade: %v %v", owed, err)
+	}
+	rows, err := c2.Query(ctx, `SELECT id || ' ' || src_date || ' ' || source_as_of FROM rpo_record ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"900000001 2026-11-07 2026-11-08", "900000002 2026-11-07 2026-11-07", "900000003 2026-11-09 2026-11-09"}
+	for i := range want {
+		if len(got) != len(want) || got[i] != want[i] {
+			t.Fatalf("order dates:\n got  %v\n want %v", got, want)
+		}
+	}
+}

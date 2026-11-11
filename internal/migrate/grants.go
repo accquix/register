@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -62,8 +63,8 @@ func matrix(r Roles, maintain bool) []roleGrants {
 			// The sync needs which keys are objected, not why: no reason column, no notes.
 			{"SELECT (id, ico, rpo_id, created_at, revoked_at)", []string{"objection"}},
 			{"SELECT (objection_id, rpo_id, basis, source, created_at, released_at)", []string{"objection_record"}},
-			{"SELECT", []string{"register_setup"}},
-			{"INSERT", []string{"objection_record"}}, // links of records that carry an objected IČO
+			{"SELECT, UPDATE (search_rebuild_pending)", []string{"register_setup"}}, // the rebuild after an upgrade
+			{"INSERT", []string{"objection_record"}},                                // links of records that carry an objected IČO
 		}},
 		{r.Operator, []grant{
 			{"SELECT", join(mirror, []string{"sync_source"})},
@@ -99,6 +100,9 @@ func Grant(ctx context.Context, dsn string, r Roles) error {
 	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&version); err != nil {
 		return err
 	}
+	if err := checkRoles(ctx, conn, r); err != nil {
+		return err
+	}
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return err
@@ -119,6 +123,15 @@ func Grant(ctx context.Context, dsn string, r Roles) error {
 			s += pgx.Identifier{"public", n}.Sanitize()
 		}
 		return s
+	}
+	// Rights given to everyone would reach every role, whatever is revoked from it by name.
+	for _, sql := range []string{
+		"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC",
+		"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC",
+	} {
+		if err := exec(sql); err != nil {
+			return err
+		}
 	}
 	for _, rg := range matrix(r, version >= 170000) {
 		if rg.role == "" {
@@ -145,7 +158,98 @@ func Grant(ctx context.Context, dsn string, r Roles) error {
 			return err
 		}
 	}
+	if err := verify(ctx, tx, r); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// checkRoles refuses role names that would make the matrix meaningless or harmful: a role that
+// does not exist, the connecting role or the owner of the tables (revoking from it would lock
+// migrate out of its own schema), a superuser, or a role that inherits rights from another role
+// (what a group holds cannot be revoked from its member).
+func checkRoles(ctx context.Context, conn *pgx.Conn, r Roles) error {
+	for _, name := range []string{r.API, r.Sync, r.Operator} {
+		if name == "" {
+			continue
+		}
+		var exists, super, self, owner, member bool
+		err := conn.QueryRow(ctx, `SELECT
+  EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1),
+  coalesce((SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = $1), false),
+  $1 = current_user,
+  EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_roles o ON o.oid = c.relowner
+          WHERE n.nspname = 'public' AND o.rolname = $1),
+  EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles x ON x.oid = m.member WHERE x.rolname = $1)`, name).
+			Scan(&exists, &super, &self, &owner, &member)
+		switch {
+		case err != nil:
+			return err
+		case !exists:
+			return fmt.Errorf("role %q does not exist", name)
+		case self || owner:
+			return fmt.Errorf("role %q runs migrate or owns the tables: name a separate role for the API, the sync and the operator", name)
+		case super:
+			return fmt.Errorf("role %q is a superuser (or bypasses row security): table rights do not bind it", name)
+		case member:
+			return fmt.Errorf("role %q is a member of another role and inherits its rights: use a role without memberships", name)
+		}
+	}
+	return nil
+}
+
+// verify checks the effective rights after the grants, in the same transaction: what a role must
+// not be able to do is asked of PostgreSQL, not assumed from the statements above. A failure
+// rolls everything back.
+func verify(ctx context.Context, tx pgx.Tx, r Roles) error {
+	type check struct{ role, table, privileges, why string }
+	var checks []check
+	deny := func(role, why, privileges string, tables ...string) {
+		for _, t := range tables {
+			if role != "" {
+				checks = append(checks, check{role, t, privileges, why})
+			}
+		}
+	}
+	all := "SELECT, INSERT, UPDATE, DELETE, TRUNCATE"
+	write := "INSERT, UPDATE, DELETE, TRUNCATE"
+	deny(r.API, "the API must not see objections", all, "objection", "objection_record")
+	deny(r.API, "the API must not see the sync journal or staging", all, join(stage, []string{"sync_unit", "sync_run", "rpo_snapshot_seen", "rpo_seen"})...)
+	deny(r.API, "the API never writes", write, join(mirror, search, []string{"sync_source", "register_setup"})...)
+	deny(r.Sync, "the sync must not change objections", "INSERT, UPDATE, DELETE, TRUNCATE", "objection")
+	deny(r.Sync, "the sync may only add links", "UPDATE, DELETE, TRUNCATE", "objection_record")
+	deny(r.Operator, "the operator must not write register data", write, join(mirror, stage, state)...)
+	deny(r.Operator, "an objection is never deleted", "DELETE, TRUNCATE", "objection", "objection_record")
+	for _, c := range checks {
+		held := false
+		if err := tx.QueryRow(ctx, `SELECT has_table_privilege($1, $2, $3)`, c.role, "public."+c.table, c.privileges).Scan(&held); err != nil {
+			return err
+		}
+		// a right on single columns counts too (INSERT, UPDATE and SELECT exist per column)
+		if cols := columnPrivileges(c.privileges); !held && cols != "" {
+			if err := tx.QueryRow(ctx, `SELECT has_any_column_privilege($1, $2, $3)`, c.role, "public."+c.table, cols).Scan(&held); err != nil {
+				return err
+			}
+		}
+		if held {
+			return fmt.Errorf("role %q still holds one of %s on %s (%s): revoke what it holds through other grants, then run migrate again", c.role, c.privileges, c.table, c.why)
+		}
+	}
+	return nil
+}
+
+// columnPrivileges keeps the privileges that exist per column; "" when none does.
+func columnPrivileges(list string) string {
+	out := ""
+	for _, p := range []string{"SELECT", "INSERT", "UPDATE"} {
+		if strings.Contains(list, p) {
+			if out != "" {
+				out += ", "
+			}
+			out += p
+		}
+	}
+	return out
 }
 
 // Tables lists every table and view the matrix knows; a test checks it against the schema.

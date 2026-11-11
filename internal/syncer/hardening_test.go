@@ -492,3 +492,64 @@ func TestReplacedSnapshotIsNeverMixed(t *testing.T) {
 	}
 	eq(t, "absent against the final set only", strs(t, conn, `SELECT id::text FROM rpo_record WHERE removed_at IS NOT NULL`), []string{"900000015"})
 }
+
+// A file named for a day that has not come is not used. A complete snapshot named 9999-12-31
+// used to be picked as the newest, rejected for its export date, and picked again after every
+// unblock: only the publisher could clear it (review finding D12).
+func TestFilesNamedForTheFutureAreIgnored(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	s := newSync(t, conn, b)
+	alfa := testkit.Company(1, "Alfa Stavby, s.r.o.")
+	b.PutSnapshot("2026-01-03", []testkit.Rec{alfa}, 3)
+	b.PutSnapshot("9999-12-31", []testkit.Rec{testkit.Company(9, "Budúcnosť, s.r.o.")}, 3)
+	b.PutDaily("9999-12-30", []testkit.Rec{testkit.Company(8, "Zajtrajšok, s.r.o.")})
+	for i := 0; i < 2; i++ { // the bootstrap, then a pass on the published database
+		if err := s.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if st := state(t, conn); st.State != "daily" || st.BaseSnapshot != "2026-01-03" || st.AppliedThrough != "2026-01-03" {
+			t.Fatalf("pass %d: %+v", i, st)
+		}
+	}
+	if n := num(t, conn, `SELECT count(*) FROM rpo_record`); n != 1 {
+		t.Fatalf("records: %d", n)
+	}
+}
+
+// After an upgrade whose migration changes what is hidden, the API does not serve until the sync
+// has rebuilt the search layer (review finding D4). The stale search row here stands for one that
+// an earlier rule left behind.
+func TestSearchIsRebuiltAfterAnUpgrade(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	s := newSync(t, conn, b)
+	b.PutSnapshot("2026-01-03", []testkit.Rec{testkit.Company(1, "Alfa Stavby, s.r.o."), testkit.Company(2, "Beta Pekáreň, s.r.o.")}, 3)
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// what a migration leaves: the search rows of one subject are missing, another's are stale,
+	// and the rebuild is owed
+	if _, err := conn.Exec(ctx, `DELETE FROM search_name WHERE skey = '99900001'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE search_name SET name_core = 'stary nazov' WHERE skey = '99900002'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE register_setup SET search_rebuild_pending = true WHERE only_row`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Run(ctx); err != nil { // a pass with nothing new in the bucket
+		t.Fatal(err)
+	}
+	eq(t, "search after the rebuild", strs(t, conn, `SELECT skey || ' ' || name_core FROM search_name`),
+		[]string{"99900001 alfa stavby", "99900002 beta pekaren"})
+	if n := num(t, conn, `SELECT count(*) FROM register_setup WHERE search_rebuild_pending`); n != 0 {
+		t.Fatal("the rebuild is still marked as owed")
+	}
+	if n := num(t, conn, `SELECT count(*) FROM search_word WHERE word IN ('stary', 'nazov')`); n != 0 {
+		t.Fatal("the dictionary kept words of the stale rows")
+	}
+}
