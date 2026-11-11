@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -107,9 +106,13 @@ type State struct {
 	PreviousState  string
 	Cursor         struct {
 		Reconcile string `json:"reconcile,omitempty"` // RPO: snapshot being reconciled
-		ETag      string `json:"etag,omitempty"`      // FS: ETag of the applied version
-		SHA256    string `json:"sha256,omitempty"`    // FS: content hash of the applied version
-		Skipped   int    `json:"skipped,omitempty"`   // FS: items of the applied version without any identifier
+		// Fingerprint of the snapshot being bootstrapped or reconciled: its part names, sizes and
+		// ETags. If the bucket shows another one for the same date, the files were replaced, and
+		// what was applied from the old set must not be mixed with the new.
+		Fingerprint string `json:"fingerprint,omitempty"`
+		ETag        string `json:"etag,omitempty"`    // FS: ETag of the applied version
+		SHA256      string `json:"sha256,omitempty"`  // FS: content hash of the applied version
+		Skipped     int    `json:"skipped,omitempty"` // FS: items of the applied version without any identifier
 	}
 	Diagnostic string
 }
@@ -312,11 +315,28 @@ func (s *RPO) completeSnapshot(ctx context.Context, inv rpo.Inventory, after str
 			parts = append(parts, o)
 		}
 		if complete {
-			h := sha256.Sum256([]byte(strings.Join(names, "\n")))
-			return snap, parts, hex.EncodeToString(h[:]), nil
+			return snap, parts, fingerprint(snap, parts), nil
 		}
 	}
 	return nil, nil, "", nil
+}
+
+// fingerprint identifies the content of a snapshot, not only its file names: the manifest and
+// every part with its size and ETag (the bucket's content validator). Two listings give the same
+// fingerprint only when no file was replaced in between.
+func fingerprint(snap *rpo.Snapshot, parts []rpo.Object) string {
+	h := sha256.New()
+	add := func(o rpo.Object) {
+		// without an ETag, the modification time is the next best sign of a replaced file
+		fmt.Fprintf(h, "%s\x00%d\x00%s\x00%d\n", o.Key, o.Size, o.ETag, o.Modified.UnixNano())
+	}
+	if snap.Manifest != nil {
+		add(*snap.Manifest)
+	}
+	for _, p := range parts {
+		add(p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // settled reports whether every file of the snapshot has been in the bucket for SnapshotSettle.
@@ -364,6 +384,7 @@ func (s *RPO) apply(ctx context.Context, obj rpo.Object, path string, u ingest.R
 	}
 	u.Open = func() (io.ReadCloser, error) { return os.Open(path) }
 	u.CheckDate = s.dateCheck(obj)
+	u.ETag = obj.ETag
 	// Order by the date in the file name, the order the files are applied in. Ordering by the
 	// exportDate inside would let a snapshot part stamped a day late outrank the next daily file.
 	if named, ok := rpo.KeyDate(obj.Key); ok {
@@ -486,7 +507,10 @@ func (s *RPO) bootstrap(ctx context.Context, st *State, inv rpo.Inventory) error
 		return nil
 	}
 	date := fmtDay(snap.Date)
-	if st.State == "empty" || st.BaseSnapshot != date {
+	if st.State == "empty" || st.BaseSnapshot != date || st.Cursor.Fingerprint != manifestSHA {
+		if st.BaseSnapshot == date && st.Cursor.Fingerprint != "" {
+			s.cfg.Log.Warn("rpo bootstrap: the snapshot's files were replaced in the bucket; starting over", "snapshot", date)
+		}
 		// A bootstrap that moves to another snapshot starts over: rows of the abandoned one must
 		// not be published with it. Nothing is published yet, so emptying the table is safe.
 		if st.PublishedAsOf != "" {
@@ -503,7 +527,7 @@ func (s *RPO) bootstrap(ctx context.Context, st *State, inv rpo.Inventory) error
 		if _, err := tx.Exec(ctx, `DELETE FROM sync_unit WHERE source = 'rpo'`); err != nil {
 			return err
 		}
-		st.State, st.BaseSnapshot = "bootstrap", date
+		st.State, st.BaseSnapshot, st.Cursor.Fingerprint = "bootstrap", date, manifestSHA
 		if err := saveState(ctx, tx, "rpo", *st); err != nil {
 			return err
 		}
@@ -585,7 +609,7 @@ ON CONFLICT (snapshot_date) DO UPDATE SET parts = EXCLUDED.parts, records = EXCL
 		snap.Date, len(parts), total, manifestSHA); err != nil {
 		return err
 	}
-	st.State, st.AppliedThrough, st.PublishedAsOf, st.Diagnostic = "daily", through, through, ""
+	st.State, st.AppliedThrough, st.PublishedAsOf, st.Diagnostic, st.Cursor.Fingerprint = "daily", through, through, "", ""
 	if err := saveState(ctx, tx, "rpo", *st); err != nil {
 		return err
 	}
@@ -600,7 +624,7 @@ func (s *RPO) reconcile(ctx context.Context, st *State, inv rpo.Inventory, date 
 	snap, ok := inv.Snapshots[date]
 	if !ok {
 		// the snapshot left the bucket mid-reconcile: give up on it, the next one will heal.
-		st.State, st.Cursor.Reconcile = "daily", ""
+		st.State, st.Cursor.Reconcile, st.Cursor.Fingerprint = "daily", "", ""
 		return s.save(ctx, *st)
 	}
 	_, parts, manifestSHA, err := s.completeSnapshot(ctx, rpo.Inventory{Snapshots: map[string]*rpo.Snapshot{date: snap}}, "")
@@ -610,7 +634,7 @@ func (s *RPO) reconcile(ctx context.Context, st *State, inv rpo.Inventory, date 
 	if parts == nil {
 		return fmt.Errorf("snapshot %s is no longer complete", date)
 	}
-	if st.State != "reconcile" || st.Cursor.Reconcile != date {
+	if st.State != "reconcile" || st.Cursor.Reconcile != date || st.Cursor.Fingerprint != manifestSHA {
 		tx, err := s.conn.Begin(ctx)
 		if err != nil {
 			return err
@@ -619,7 +643,19 @@ func (s *RPO) reconcile(ctx context.Context, st *State, inv rpo.Inventory, date 
 		if _, err := tx.Exec(ctx, `TRUNCATE rpo_seen`); err != nil {
 			return err
 		}
-		st.State, st.Cursor.Reconcile = "reconcile", date
+		if st.State == "reconcile" && st.Cursor.Reconcile == date {
+			// The same snapshot with other content: every part is applied again, so that the
+			// absence marking at the end sees one consistent set.
+			s.cfg.Log.Warn("rpo reconcile: the snapshot's files were replaced in the bucket; starting over", "snapshot", date)
+			names := make([]string, len(parts))
+			for i, p := range parts {
+				names[i] = unitName(p)
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM sync_unit WHERE unit = ANY($1)`, names); err != nil {
+				return err
+			}
+		}
+		st.State, st.Cursor.Reconcile, st.Cursor.Fingerprint = "reconcile", date, manifestSHA
 		if err := saveState(ctx, tx, "rpo", *st); err != nil {
 			return err
 		}
@@ -642,6 +678,16 @@ func (s *RPO) reconcile(ctx context.Context, st *State, inv rpo.Inventory, date 
 			ingest.ErrRejected, date, total, prev, s.cfg.SnapshotMinRatio)
 	}
 
+	// The set must still be the one that was applied before records are marked absent against it.
+	if fresh, err := s.cfg.Bucket.Inventory(ctx); err != nil {
+		return err
+	} else if again, ok := fresh.Snapshots[date]; !ok {
+		return fmt.Errorf("snapshot %s left the bucket during the reconcile; will retry", date)
+	} else if _, _, sha2, err := s.completeSnapshot(ctx, rpo.Inventory{Snapshots: map[string]*rpo.Snapshot{date: again}}, ""); err != nil {
+		return err
+	} else if sha2 != manifestSHA {
+		return fmt.Errorf("snapshot %s changed in the bucket during the reconcile; the next pass starts it over", date)
+	}
 	tx, err := s.conn.Begin(ctx)
 	if err != nil {
 		return err
@@ -667,7 +713,7 @@ ON CONFLICT (snapshot_date) DO UPDATE SET parts = EXCLUDED.parts, records = EXCL
 	if st.AppliedThrough < date {
 		st.AppliedThrough = date
 	}
-	st.PublishedAsOf, st.State, st.Cursor.Reconcile, st.Diagnostic = st.AppliedThrough, "daily", "", ""
+	st.PublishedAsOf, st.State, st.Cursor.Reconcile, st.Cursor.Fingerprint, st.Diagnostic = st.AppliedThrough, "daily", "", "", ""
 	if err := saveState(ctx, tx, "rpo", *st); err != nil {
 		return err
 	}

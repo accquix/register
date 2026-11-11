@@ -23,7 +23,8 @@ var ErrRejected = errors.New("unit rejected by validation")
 type RPOUnit struct {
 	Name          string // checkpoint name, e.g. "rpo:actual_2026-11-09.json.gz"
 	SHA256        string
-	Rank          int16 // 0 daily file, 1 snapshot part (the order guard compares (date, rank))
+	ETag          string // the bucket's content validator for this file, recorded with the unit
+	Rank          int16  // 0 daily file, 1 snapshot part (the order guard compares (date, rank))
 	Open          func() (io.ReadCloser, error)
 	RefreshSearch bool // update the search layer for touched subjects
 	MarkSeen      bool // record ids in rpo_seen (reconcile)
@@ -194,11 +195,11 @@ func ApplyRPO(ctx context.Context, conn *pgx.Conn, u RPOUnit) (UnitResult, error
 			return res, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO sync_unit (unit, source, sha256, records, inserted, updated, status)
-VALUES ($1, 'rpo', $2, $3, $4, $5, 'applied')
-ON CONFLICT (unit) DO UPDATE SET sha256 = EXCLUDED.sha256, records = EXCLUDED.records, inserted = EXCLUDED.inserted,
+	if _, err := tx.Exec(ctx, `INSERT INTO sync_unit (unit, source, etag, sha256, records, inserted, updated, status)
+VALUES ($1, 'rpo', nullif($6, ''), $2, $3, $4, $5, 'applied')
+ON CONFLICT (unit) DO UPDATE SET etag = EXCLUDED.etag, sha256 = EXCLUDED.sha256, records = EXCLUDED.records, inserted = EXCLUDED.inserted,
   updated = EXCLUDED.updated, status = 'applied', detail = NULL, applied_at = now()`,
-		u.Name, u.SHA256, res.Records, res.Inserted, res.Updated); err != nil {
+		u.Name, u.SHA256, res.Records, res.Inserted, res.Updated, u.ETag); err != nil {
 		return res, err
 	}
 	if u.After != nil {

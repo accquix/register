@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,5 +208,51 @@ func TestDownloadAll(t *testing.T) {
 	bk.Retries, bk.RetryDelay = 1, time.Millisecond
 	if _, err := bk.DownloadAll(context.Background(), objs, t.TempDir(), 3); err == nil {
 		t.Fatal("want an error for a missing object")
+	}
+}
+
+// A local copy is reused only for the same content: the same key with the same size but another
+// ETag is downloaded again, and a body that does not match the listed ETag is refused.
+func TestDownloadNeverReusesAnotherVersion(t *testing.T) {
+	ctx := context.Background()
+	b := testkit.NewBucket(t)
+	bk := rpo.NewBucket(b.URL())
+	bk.Retries = 1
+	bk.RetryDelay = time.Millisecond
+	dir := t.TempDir()
+	const key = "batch-daily/actual_2026-01-04.json.gz"
+	object := func() rpo.Object {
+		objs, err := bk.List(ctx, "batch-daily/")
+		if err != nil || len(objs) != 1 {
+			t.Fatalf("list: %v %v", objs, err)
+		}
+		return objs[0]
+	}
+	b.Put(key, []byte("AAAAAAAA"))
+	first := object()
+	p1, err := bk.Download(ctx, first, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bk.Download(ctx, first, dir); err != nil || b.Gets[key] != 1 {
+		t.Fatalf("the same version must be reused: gets %d, %v", b.Gets[key], err)
+	}
+	b.Put(key, []byte("BBBBBBBB")) // same size, other content
+	second := object()
+	p2, err := bk.Download(ctx, second, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(p2)
+	if string(got) != "BBBBBBBB" || b.Gets[key] != 2 || p1 == p2 {
+		t.Fatalf("another version was served from the old copy: %q, gets %d, %s %s", got, b.Gets[key], p1, p2)
+	}
+	if _, err := os.Stat(p1); err == nil {
+		t.Fatal("the copy of the old version was left behind")
+	}
+	// the bucket now serves other bytes than it listed
+	b.Put(key, []byte("CCCCCCCC"))
+	if _, err := bk.Download(ctx, rpo.Object{Key: key, Size: 8, ETag: first.ETag}, dir); !errors.Is(err, rpo.ErrChanged) {
+		t.Fatalf("want ErrChanged, got %v", err)
 	}
 }

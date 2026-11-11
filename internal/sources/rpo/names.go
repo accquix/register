@@ -11,6 +11,7 @@ type Object struct {
 	Key      string
 	Size     int64
 	Modified time.Time // LastModified from the listing; zero when the bucket did not say
+	ETag     string    // the listing's content validator, without quotes; "" when the bucket gave none
 }
 
 var (

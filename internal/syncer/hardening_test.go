@@ -411,3 +411,84 @@ func TestFSSkipsItemsWithoutAnyIdentifier(t *testing.T) {
 		t.Fatalf("a blocked version must not change the data: %d", n)
 	}
 }
+
+// A snapshot whose files are replaced in the bucket under the same names must never be published
+// as a mix of the two sets (review finding D5). Part 2 of the first set is rejected, the bootstrap
+// blocks with part 1 applied; the publisher uploads every part again with other content; after the
+// unblock only the new set is published, and each unit records the ETag it was applied from.
+func TestReplacedSnapshotIsNeverMixed(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	b := testkit.NewBucket(t)
+	bk := rpo.NewBucket(b.URL())
+	bk.Retries = 1
+	work := t.TempDir()
+	mk := func() *syncer.RPO {
+		return syncer.NewRPO(conn, syncer.RPOConfig{Bucket: bk, WorkDir: work, PartRecords: 2})
+	}
+	co := func(n int) testkit.Rec { return testkit.Company(n, "Firma "+string(rune('A'+n))) }
+	manifest := []byte("init_2026-01-03_001.json.gz\ninit_2026-01-03_002.json.gz\ninit_2026-01-03_003.json.gz\n")
+	put := func(parts ...[]testkit.Rec) {
+		for i, recs := range parts {
+			b.Put("batch-init/init_2026-01-03_00"+string(rune('1'+i))+".json.gz", testkit.File("2026-01-03", recs))
+		}
+		b.Put("batch-init/init_2026-01-03_list.txt", manifest)
+	}
+
+	// the first set: part 2 holds one record instead of two, so it is rejected after part 1 applied
+	put([]testkit.Rec{co(1), co(2)}, []testkit.Rec{co(3)}, []testkit.Rec{co(5)})
+	if err := mk().Run(ctx); !errors.Is(err, syncer.ErrBlocked) {
+		t.Fatalf("want a block on part 2, got %v", err)
+	}
+	if n := num(t, conn, `SELECT count(*) FROM rpo_record`); n != 2 {
+		t.Fatalf("records applied from the first set: %d", n)
+	}
+	// the publisher replaces every part, same names, other records
+	put([]testkit.Rec{co(11), co(12)}, []testkit.Rec{co(13), co(14)}, []testkit.Rec{co(15)})
+	if err := syncer.Unblock(ctx, conn, "rpo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mk().Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(t, conn); st.State != "daily" || st.BaseSnapshot != "2026-01-03" {
+		t.Fatalf("state: %+v", st)
+	}
+	eq(t, "only the second set is published", strs(t, conn, `SELECT id::text FROM rpo_record`),
+		[]string{"900000011", "900000012", "900000013", "900000014", "900000015"})
+	eq(t, "the search layer holds only the second set", strs(t, conn, `SELECT skey FROM search_name`),
+		[]string{"99900011", "99900012", "99900013", "99900014", "99900015"})
+	if n := num(t, conn, `SELECT count(*) FROM sync_unit WHERE unit LIKE 'rpo:init_%' AND status = 'applied' AND etag IS NOT NULL`); n != 3 {
+		t.Fatalf("units with the ETag they were applied from: %d", n)
+	}
+
+	// the same during a monthly reconcile: the next snapshot is replaced after its first part
+	put2 := func(parts ...[]testkit.Rec) {
+		for i, recs := range parts {
+			b.Put("batch-init/init_2026-02-07_00"+string(rune('1'+i))+".json.gz", testkit.File("2026-02-07", recs))
+		}
+		b.Put("batch-init/init_2026-02-07_list.txt", []byte("init_2026-02-07_001.json.gz\ninit_2026-02-07_002.json.gz\ninit_2026-02-07_003.json.gz\n"))
+	}
+	renamed := co(11)
+	renamed.Name = "Firma Stará Verzia"
+	put2([]testkit.Rec{renamed, co(12)}, []testkit.Rec{co(13)}, []testkit.Rec{co(14)}) // part 2 short: rejected after part 1
+	loose := func() *syncer.RPO {
+		return syncer.NewRPO(conn, syncer.RPOConfig{Bucket: bk, WorkDir: work, PartRecords: 2, AbsenceMaxRatio: 0.9, SnapshotMinRatio: 0.1})
+	}
+	if err := loose().Run(ctx); !errors.Is(err, syncer.ErrBlocked) {
+		t.Fatalf("want a block in the reconcile, got %v", err)
+	}
+	final := co(11)
+	final.Name = "Firma Nová Verzia"
+	put2([]testkit.Rec{final, co(12)}, []testkit.Rec{co(13), co(14)}, []testkit.Rec{co(16)}) // the corrected set; record 15 is gone
+	if err := syncer.Unblock(ctx, conn, "rpo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := loose().Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strs(t, conn, `SELECT name FROM rpo_record WHERE id = 900000011`); got[0] != "Firma Nová Verzia" {
+		t.Fatalf("the reconcile kept data of the replaced set: %v", got)
+	}
+	eq(t, "absent against the final set only", strs(t, conn, `SELECT id::text FROM rpo_record WHERE removed_at IS NOT NULL`), []string{"900000015"})
+}

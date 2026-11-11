@@ -3,6 +3,9 @@ package rpo
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -37,6 +40,7 @@ type listResult struct {
 		Key          string    `xml:"Key"`
 		Size         int64     `xml:"Size"`
 		LastModified time.Time `xml:"LastModified"`
+		ETag         string    `xml:"ETag"`
 	} `xml:"Contents"`
 	IsTruncated           bool   `xml:"IsTruncated"`
 	NextContinuationToken string `xml:"NextContinuationToken"`
@@ -70,7 +74,7 @@ func (b *Bucket) List(ctx context.Context, prefix string) ([]Object, error) {
 			return nil, fmt.Errorf("list %s: %w", prefix, err)
 		}
 		for _, c := range lr.Contents {
-			out = append(out, Object{Key: c.Key, Size: c.Size, Modified: c.LastModified})
+			out = append(out, Object{Key: c.Key, Size: c.Size, Modified: c.LastModified, ETag: strings.Trim(c.ETag, `"`)})
 		}
 		if !lr.IsTruncated || lr.NextContinuationToken == "" {
 			return out, nil
@@ -120,7 +124,17 @@ func (b *Bucket) ReadManifest(ctx context.Context, key string) ([]string, error)
 // Download fetches obj into dir and returns the local path. A partial file left by an earlier
 // attempt is resumed with a Range request. The final size must equal the listed size.
 func (b *Bucket) Download(ctx context.Context, obj Object, dir string) (string, error) {
-	path := filepath.Join(dir, filepath.Base(obj.Key))
+	path := localPath(obj, dir)
+	// Copies of other versions of this object are never reused: a partial or whole file is resumed
+	// or kept only when it belongs to the same content (the same ETag). Without an ETag nothing
+	// can be told apart, so nothing is reused.
+	if old, _ := filepath.Glob(filepath.Join(dir, filepath.Base(obj.Key)+"*")); len(old) > 0 {
+		for _, f := range old {
+			if f != path || obj.ETag == "" {
+				_ = os.Remove(f)
+			}
+		}
+	}
 	retries, delay := b.Retries, b.RetryDelay
 	if retries <= 0 {
 		retries = 4
@@ -140,7 +154,14 @@ func (b *Bucket) Download(ctx context.Context, obj Object, dir string) (string, 
 		}
 		last = b.downloadOnce(ctx, obj, path)
 		if last == nil {
+			last = verifyETag(obj, path)
+		}
+		if last == nil {
 			return path, nil
+		}
+		if errors.Is(last, ErrChanged) {
+			_ = os.Remove(path)
+			return "", fmt.Errorf("download %s: %w", obj.Key, last)
 		}
 		if errors.Is(last, context.Canceled) || errors.Is(last, context.DeadlineExceeded) {
 			return "", last
@@ -201,6 +222,43 @@ func (b *Bucket) downloadOnce(ctx context.Context, obj Object, path string) erro
 	}
 	if have+n != obj.Size {
 		return fmt.Errorf("%s: got %d bytes, want %d", obj.Key, have+n, obj.Size)
+	}
+	return nil
+}
+
+// ErrChanged means the object's content is not the one the listing described: the file was
+// replaced in the bucket after it was listed.
+var ErrChanged = errors.New("the file changed in the bucket after it was listed")
+
+// localPath is where obj is kept while it is applied. The name carries a digest of the ETag, so
+// two versions of one key never share a file.
+func localPath(obj Object, dir string) string {
+	base := filepath.Base(obj.Key)
+	if obj.ETag == "" {
+		return filepath.Join(dir, base)
+	}
+	sum := sha256.Sum256([]byte(obj.ETag))
+	return filepath.Join(dir, base+"~"+hex.EncodeToString(sum[:6]))
+}
+
+// verifyETag checks the downloaded bytes against the listing when the ETag is a plain MD5 (an
+// object uploaded in one piece). Multipart ETags are not content hashes and are not checked here;
+// the snapshot fingerprint still catches a change of them.
+func verifyETag(obj Object, path string) error {
+	if len(obj.ETag) != 32 || strings.Trim(obj.ETag, "0123456789abcdef") != "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := md5.New() //nolint:gosec // S3 ETags are MD5; this detects a replaced file, it is not a signature
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	if hex.EncodeToString(h.Sum(nil)) != obj.ETag {
+		return ErrChanged
 	}
 	return nil
 }

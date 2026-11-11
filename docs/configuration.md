@@ -96,6 +96,11 @@ route, status, duration and key name only.
   total reaches `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS`, builds the search layer and only then
   publishes (D22). If a newer snapshot appears before publication, the bootstrap starts over
   with it: rows of the abandoned snapshot are never published.
+- **Replaced files:** a snapshot is identified by its content, not only its file names: every
+  part's size and ETag from the bucket listing. If the files of a snapshot are replaced while it
+  is being applied (a bootstrap or a monthly reconcile), the pass starts that snapshot over and
+  never publishes a mix of the two sets. A downloaded file is checked against its ETag, a local
+  copy is reused only for the same ETag, and each applied unit records the ETag it came from.
 - **File names:** a name with an impossible date (`init_2026-02-31_…`) is ignored and reported in
   the log; it is never taken for a snapshot.
 - **Later runs:** applies the next daily file, one day at a time. A missing day is never skipped:

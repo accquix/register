@@ -7,6 +7,8 @@ package synthetic
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -180,6 +182,7 @@ type listEntry struct {
 	Key          string `xml:"Key"`
 	Size         int    `xml:"Size"`
 	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag"`
 }
 
 type listXML struct {
@@ -210,7 +213,8 @@ func (b *Bucket) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				mod = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 			}
-			out.Contents = append(out.Contents, listEntry{k, len(b.objects[k]), mod.UTC().Format("2006-01-02T15:04:05.000Z")})
+			sum := md5.Sum(b.objects[k]) //nolint:gosec // S3 ETags are MD5; not a security use
+			out.Contents = append(out.Contents, listEntry{k, len(b.objects[k]), mod.UTC().Format("2006-01-02T15:04:05.000Z"), `"` + hex.EncodeToString(sum[:]) + `"`})
 		}
 		if end < len(keys) {
 			out.IsTruncated, out.NextContinuationToken = true, strconv.Itoa(end)
