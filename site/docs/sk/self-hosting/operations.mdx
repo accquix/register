@@ -50,12 +50,15 @@ accquix-register suppress --list                       # všetky námietky s č�
 accquix-register suppress --undo --id 1                # odvolať jednu námietku
 ```
 
-Každá námietka má číslo. Skryje záznamy, ktoré nesú dané IČO, záznamy, ktoré ho niesli v čase zaznamenania
-námietky, a záznamy neskôr vytvorené s týmto IČO; záznam zostane skrytý, aj keď IČO stratí alebo zmení. Na iné
-identifikátory sa nič nekopíruje, takže nesprávne IČO v zdrojovom súbore natrvalo neskryje iný subjekt. Odvolanie
-zruší jednu námietku a oznámi, či subjekt stále skrýva iná. Po každej zmene námietky exportujte
-(`suppress --export`, pozrite [Databáza](/sk/self-hosting/database)): sú to jediné dáta, ktoré opätovné zostavenie
-neobnoví. Do `--reason` nezapisujte osobné údaje.
+Každá námietka má číslo. Pri zaznamenaní sa prepojí so záznamami, ktoré nesú dané IČO, a synchronizácia prepojí
+každý záznam, ktorý s týmto IČO uvidí neskôr (s upozornením v logu). Prepojený záznam zostane skrytý, aj keď IČO
+stratí alebo zmení, a prepojenie sa nikdy nerozšíri na iné záznamy s novým IČO. Register nedokáže rozlíšiť chybu
+zdroja od skutočnej zmeny, preto sa prikláňa k skrytiu: ak súbor omylom pridelí záznamu iného subjektu namietané
+IČO, tento jeden záznam zostane skrytý. `suppress --list --id N` ukáže každé prepojenie aj súbor, ktorý ho
+spôsobil, a `suppress --release --id N --record R` natrvalo vyjme jeden záznam bez zásahu do námietky. Odvolanie
+zruší jednu námietku a oznámi, koľko záznamov stále skrývajú iné námietky. Po každej zmene námietky exportujte
+(`suppress --export`): sú to jediné dáta, ktoré opätovné zostavenie neobnoví. Do `--reason` nezapisujte osobné
+údaje.
 
 ## Aktualizácie
 

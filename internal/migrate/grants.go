@@ -59,13 +59,19 @@ func matrix(r Roles, maintain bool) []roleGrants {
 		}},
 		{r.Sync, []grant{
 			{write, join(mirror, search, stage, state)},
-			{"SELECT", []string{"objection", "objection_record", "register_setup"}},
-			{"INSERT", []string{"objection_record"}}, // anchors of records created with a suppressed IČO
+			// The sync needs which keys are objected, not why: no reason column, no notes.
+			{"SELECT (id, ico, rpo_id, created_at, revoked_at)", []string{"objection"}},
+			{"SELECT (objection_id, rpo_id, basis, source, created_at, released_at)", []string{"objection_record"}},
+			{"SELECT", []string{"register_setup"}},
+			{"INSERT", []string{"objection_record"}}, // links of records that carry an objected IČO
 		}},
 		{r.Operator, []grant{
 			{"SELECT", join(mirror, []string{"sync_source"})},
 			{"SELECT, INSERT, UPDATE, DELETE", search},
-			{"SELECT, INSERT, UPDATE", []string{"objection", "objection_record", "register_setup"}},
+			// An objection is never rewritten: the operator adds one, revokes one, releases a link.
+			{"SELECT, INSERT, UPDATE (revoked_at)", []string{"objection"}},
+			{"SELECT, INSERT, UPDATE (released_at, released_reason)", []string{"objection_record"}},
+			{"SELECT, UPDATE (objections_confirmed_at, objections_confirmed_as)", []string{"register_setup"}},
 		}},
 	}
 }

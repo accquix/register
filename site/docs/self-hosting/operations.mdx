@@ -50,12 +50,15 @@ accquix-register suppress --list                       # every objection with it
 accquix-register suppress --undo --id 1                # revoke one objection
 ```
 
-Each objection has a number. It hides the records that carry the IČO, the records that carried it when the objection
-was recorded, and records later created with it; a record stays hidden when it loses or changes its IČO. Nothing is
-copied onto other identifiers, so a wrong IČO in a source file never hides another subject for good. An undo revokes
-one objection and tells you if another still hides the subject. Export the objections after every change
-(`suppress --export`, see [Database](/self-hosting/database#back-up-the-objections)): they are the only data a
-rebuild cannot restore. Do not put personal data into `--reason`.
+Each objection has a number. It is linked to the records that carry the IČO when you record it, and the sync links
+every record it later sees carrying it (with a warning in the log). A linked record stays hidden when it loses or
+changes its IČO, and a link never extends to other records with the new IČO. The register cannot tell a source
+mistake from a real change, so it errs towards hiding: if a file wrongly gives another subject's record the
+objected IČO, that one record stays hidden. `suppress --list --id N` shows every link and the file that caused it,
+and `suppress --release --id N --record R` excludes one record for good without touching the objection. An undo
+revokes one objection and tells you how many records other objections still hide. Export the objections after
+every change (`suppress --export`): they are the only data a rebuild cannot restore. Do not put personal data into
+`--reason`.
 
 ## Upgrades
 

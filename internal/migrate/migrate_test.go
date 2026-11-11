@@ -194,3 +194,71 @@ FROM objection o ORDER BY 1`)
 		t.Fatalf("a published database must stay confirmed: %q %v", as, err)
 	}
 }
+
+// Migration 00005 on an existing database: every record that carries an objected IČO is linked at
+// once (the earlier rule had linked only some), existing links keep working, a revoked objection
+// gets no new links, and the API's view leaves an objection with a released record out of the
+// by-IČO filter.
+func TestLinksAreCompletedOnAnExistingDatabase(t *testing.T) {
+	dsn := testDatabase(t)
+	ctx := context.Background()
+	p, db, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 4); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	c, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close(ctx)
+	if _, err := c.Exec(ctx, `
+INSERT INTO rpo_record (id, ico, kind, source_as_of, src_date, src_rank, row_hash) VALUES
+  (900000004, '99900004', 'sole_trader', '2026-11-07', '2026-11-07', 1, '\x00'),
+  (900000005, '99900004', 'sole_trader', '2026-11-07', '2026-11-07', 1, '\x00'),  -- carries the IČO, never linked
+  (900000006, NULL,       'sole_trader', '2026-11-07', '2026-11-07', 1, '\x00'),  -- linked earlier, lost the IČO
+  (900000007, '99900007', 'sole_trader', '2026-11-07', '2026-11-07', 1, '\x00');
+INSERT INTO objection (ico, reason) VALUES ('99900004', 'ticket 1');
+INSERT INTO objection (ico, reason, revoked_at) VALUES ('99900007', 'ticket 2', now());
+INSERT INTO objection_record (objection_id, rpo_id) VALUES (1, 900000004), (1, 900000006)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := c.Query(ctx, `SELECT objection_id || ' ' || rpo_id || ' ' || basis FROM objection_record ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"1 900000004 migrated", "1 900000005 migrated", "1 900000006 migrated"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("links after the migration:\n got  %v\n want %v", got, want)
+	}
+	var n int
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM objection_active WHERE ico = '99900004'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the view must list the active objection by IČO: %d %v", n, err)
+	}
+	if _, err := c.Exec(ctx, `UPDATE objection_record SET released_at = now() WHERE rpo_id = 900000005`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM objection_active WHERE ico = '99900004'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("an objection with a released record must leave the by-IČO filter: %d %v", n, err)
+	}
+	// down and up again keeps the objections and the links
+	if _, err := DownTo(ctx, dsn, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Up(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM objection_record`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("links after down and up: %d %v", n, err)
+	}
+}

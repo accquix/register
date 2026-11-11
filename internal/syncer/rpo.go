@@ -382,6 +382,12 @@ func (s *RPO) apply(ctx context.Context, obj rpo.Object, path string, u ingest.R
 		}
 		return res, err
 	}
+	// A link the sync adds hides a record on its own authority. It is never silent: the operator
+	// sees which objection grew and from which file, and can release a wrong link.
+	for id, n := range res.Linked {
+		s.cfg.Log.Warn("objection linked to records that carry its identifier", "objection", id, "records", n, "unit", u.Name,
+			"review", fmt.Sprintf("suppress --list --id %d", id))
+	}
 	s.cfg.Log.Info("rpo unit applied", "unit", u.Name, "records", res.Records, "inserted", res.Inserted,
 		"updated", res.Updated, "duration", time.Since(t0).Round(time.Millisecond))
 	_ = os.Remove(path)

@@ -19,7 +19,8 @@ Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `N
 | `serve` | HTTP API. |
 | `suppress --subject <IČO> [--reason TEXT]` | Zaznamená námietku: vyradí subjekt z vyhľadávania podľa názvu. Vypíše číslo námietky. |
 | `suppress --undo --id N` | Odvolá jednu námietku a oznámi, či subjekt stále skrýva iná. |
-| `suppress --list` | Vypíše všetky námietky s ich číslami. |
+| `suppress --list [--id N]` | Vypíše všetky námietky s ich číslami; s `--id` záznamy, ktoré námietka pokrýva, a prečo. |
+| `suppress --release --id N --record R` | Vyjme jeden záznam z námietky (chybné prepojenie); `--unrelease` vyňatie zruší. |
 | `suppress --export --output FILE [--overwrite]` | Zapíše zálohu námietok. Súbor uchovávajte v súkromí. |
 | `suppress --restore FILE` | Obnoví zálohu (`-` číta štandardný vstup) a potvrdí inštaláciu. |
 | `suppress --init-empty` | Potvrdí novú inštaláciu bez námietok na obnovenie. |

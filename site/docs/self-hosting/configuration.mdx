@@ -19,7 +19,8 @@ to a file holding the value; setting both is an error.
 | `serve` | The HTTP API. |
 | `suppress --subject <IČO> [--reason TEXT]` | Records an objection: keeps a subject out of name search. Prints the objection's number. |
 | `suppress --undo --id N` | Revokes one objection, and says whether another still hides the subject. |
-| `suppress --list` | Prints every objection with its number. |
+| `suppress --list [--id N]` | Prints every objection with its number; with `--id`, the records it covers and why. |
+| `suppress --release --id N --record R` | Excludes one record from an objection (a wrong link); `--unrelease` withdraws it. |
 | `suppress --export --output FILE [--overwrite]` | Writes the backup of the objections. Keep the file private. |
 | `suppress --restore FILE` | Puts a backup back (`-` reads standard input) and confirms the installation. |
 | `suppress --init-empty` | Confirms a new installation with no objections to restore. |

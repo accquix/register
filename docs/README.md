@@ -4,6 +4,7 @@
 | --- | --- |
 | [decisions.md](decisions.md) | The maintainers' decisions (binding) |
 | [self-hosting.md](self-hosting.md) | Running an instance: requirements, compose, roles, monitoring, GDPR duties |
+| [objection-invariants.md](objection-invariants.md) | The contract of the objection model: the rules a change or a review is checked against |
 | [configuration.md](configuration.md) | Commands and environment variables implemented so far |
 | [architecture.md](architecture.md) | v1 design: data model, API, sync pipeline, personal data, deployment |
 | [sources.md](sources.md) | Sources, URLs, licences, file layouts, quirks, measured volumes |

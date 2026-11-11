@@ -143,17 +143,35 @@ objected silently returns to name search, and no source can restore them. Droppi
 
 **How an objection works**
 
+An objection is the person's request. A *link* says that the objection covers one RPO record, why,
+and since when. The two are kept apart, so a mistake in a link is corrected without touching the
+request.
+
 - `suppress --subject <IČO>` (or `r<RPO id>` for one record) records an objection with its own
-  number. It hides the records that carry that IČO, the records that carried it when the objection
-  was recorded, and records later created with it. A record stays hidden when it loses or changes
-  its IČO.
-- It is computed against the current RPO data, per record. Nothing is copied onto other
-  identifiers: if a source file wrongly gives a record another subject's IČO for a day, that other
-  subject is not hidden for good, and the correction needs no clean-up here.
-- `suppress --undo --id <N>` revokes one objection and nothing else. If another objection still
-  covers the subject, the command says so. A revoked objection stays in the list as the record of
-  the undo.
-- `suppress --list` prints every objection with its number.
+  number and links it to the records that carry that IČO now.
+- The sync links every record it later sees carrying the IČO, and logs a warning with the
+  objection's number and the file. A linked record stays hidden when it loses or changes its IČO:
+  no record leaves an objection unless you decide so.
+- A link covers that one record. It never extends to other records that share the record's new
+  IČO, so an objection does not spread to another subject.
+- **The register cannot tell a source mistake from a real change, and it errs towards hiding.** If
+  a file wrongly gives another subject's record the objected IČO, that one record is linked and
+  stays out of name search after the source corrects itself. This is a known limitation, not a
+  silent one: the link shows in the log and in `suppress --list --id <N>` with the file that
+  caused it.
+- `suppress --release --id <N> --record <R> --reason <ticket>` excludes that one record from the
+  objection. The exclusion stays on record, so the next sync does not link the record again, also
+  when a later file repeats the mistake. `suppress --unrelease --id <N> --record <R>` withdraws
+  it. The objection and its other links are untouched.
+- `suppress --undo --id <N>` revokes one objection and nothing else, and says how many of its
+  records are still hidden by other objections. A revoked objection stays in the list as the
+  record of the undo.
+- `suppress --list` prints every objection; `--list --id <N>` prints its links: the record, the
+  basis (`at_objection` by your command, `carried_ico` by the sync, `restored`, `migrated`), the
+  file, and whether it is released.
+
+Review the sync's link warnings when they appear: each is a record the register hid on its own
+authority.
 
 **Backup**
 
@@ -163,9 +181,11 @@ accquix-register suppress --export --output objections.tsv --overwrite  # replac
 # compose: docker compose run --rm -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv
 ```
 
-- Export after every change, and on a schedule. The file is written atomically, is never
-  overwritten without `--overwrite`, and is never replaced by an empty export (that is what a
-  rebuilt, empty database would produce over your only good copy). Do not redirect `--list` into
+- Export after every change, and on a schedule. The file is written atomically and is never
+  overwritten without `--overwrite`. With it, the existing file is replaced only when it is a valid
+  backup and every objection in it is also in the new one: a backup can only grow, so an empty or
+  rebuilt database can never replace your only good copy. An unconfirmed installation cannot
+  export at all. Do not redirect `--list` into
   a file: the shell truncates the file before the command runs.
 - The file lists the people who objected. Keep it encrypted (for example with `age` or `gpg`),
   with restricted access, away from the database.

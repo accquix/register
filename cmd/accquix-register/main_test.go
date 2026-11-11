@@ -92,7 +92,10 @@ func TestObjectionBackupRoundTrip(t *testing.T) {
 	at := time.Date(2026, 11, 10, 9, 30, 0, 123456000, time.UTC)
 	revoked := at.Add(time.Hour)
 	rows := []ingest.Objection{
-		{ID: 1, Key: "99900004", Reason: "ticket 12\twith a tab", CreatedAt: at, Anchors: []int64{900000004, 900000005}},
+		{ID: 1, Key: "99900004", Reason: "ticket 12\twith a tab", CreatedAt: at, Links: []ingest.Link{
+			{RecordID: 900000004, Basis: ingest.BasisAtObjection, CreatedAt: at},
+			{RecordID: 900000005, Basis: ingest.BasisCarriedICO, Source: "rpo:actual_2026-11-09.json.gz", CreatedAt: at, ReleasedAt: &revoked, ReleasedReason: "note\twith\ta tab"},
+		}},
 		{ID: 2, Key: "r900000006", CreatedAt: at, RevokedAt: &revoked},
 	}
 	var buf bytes.Buffer
@@ -104,8 +107,10 @@ func TestObjectionBackupRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].Key != "99900004" || got[0].Reason != "ticket 12 with a tab" || !got[0].CreatedAt.Equal(at) ||
-		len(got[0].Anchors) != 2 || got[0].Anchors[1] != 900000005 || got[0].RevokedAt != nil ||
-		got[1].Key != "r900000006" || got[1].RevokedAt == nil || !got[1].RevokedAt.Equal(revoked) {
+		len(got[0].Links) != 2 || got[0].Links[0].Basis != ingest.BasisAtObjection || got[0].Links[1].RecordID != 900000005 ||
+		got[0].Links[1].Source != "rpo:actual_2026-11-09.json.gz" || got[0].Links[1].ReleasedAt == nil || !got[0].Links[1].ReleasedAt.Equal(revoked) ||
+		got[0].Links[1].ReleasedReason != "note\twith\ta tab" || got[0].RevokedAt != nil ||
+		got[1].Key != "r900000006" || got[1].RevokedAt == nil || !got[1].RevokedAt.Equal(revoked) || len(got[1].Links) != 0 {
 		t.Fatalf("round trip: %+v", got)
 	}
 	file := buf.String()
@@ -114,7 +119,8 @@ func TestObjectionBackupRoundTrip(t *testing.T) {
 		"no trailer":  lines[0] + lines[1],
 		"missing row": lines[0] + lines[2],
 		"changed key": strings.Replace(file, "99900004\t", "99900005\t", 1),
-		"bad key":     "not-a-key\t" + at.Format(time.RFC3339Nano) + "\t-\t\t\n" + lines[2],
+		"bad key":     "not-a-key\t" + at.Format(time.RFC3339Nano) + "\t-\t[]\t\n" + lines[2],
+		"bad basis":   strings.Replace(file, "at_objection", "whatever", 1),
 		"extra data":  file + "99900004\tx\n",
 	} {
 		if _, err := readObjections(strings.NewReader(damaged)); err == nil {
@@ -132,34 +138,47 @@ func TestObjectionBackupRoundTrip(t *testing.T) {
 	}
 }
 
+// A backup can only grow: an export never replaces a file that holds an objection the database
+// does not have (an empty or rebuilt database over the only good copy).
 func TestExportNeverDestroysABackup(t *testing.T) {
 	at := time.Date(2026, 11, 10, 9, 30, 0, 0, time.UTC)
-	rows := []ingest.Objection{{Key: "99900004", CreatedAt: at}}
+	first := ingest.Objection{Key: "99900004", CreatedAt: at}
+	second := ingest.Objection{Key: "r900000006", CreatedAt: at}
 	path := filepath.Join(t.TempDir(), "objections.tsv")
-	if err := exportObjections(path, false, rows); err != nil {
+	if err := exportObjections(path, false, []ingest.Objection{first}); err != nil {
 		t.Fatal(err)
 	}
 	good, _ := os.ReadFile(path)
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
 		t.Fatalf("the backup must be private, got %v", st.Mode().Perm())
 	}
-	if err := exportObjections(path, false, rows); err == nil {
-		t.Fatal("an existing backup was overwritten without --overwrite")
+	for name, rows := range map[string][]ingest.Objection{
+		"no --overwrite":                 {first, second},
+		"an empty database":              nil,
+		"a database without the old row": {second},
+	} {
+		if err := exportObjections(path, name != "no --overwrite", rows); err == nil {
+			t.Fatalf("%s: the backup was replaced", name)
+		}
+		if now, _ := os.ReadFile(path); !bytes.Equal(now, good) {
+			t.Fatalf("%s: a refused export changed the file", name)
+		}
 	}
-	if err := exportObjections(path, true, nil); err == nil {
-		t.Fatal("an empty backup replaced a good one")
-	}
-	if now, _ := os.ReadFile(path); !bytes.Equal(now, good) {
-		t.Fatal("a refused export changed the file")
-	}
-	more := []ingest.Objection{rows[0], {Key: "r900000006", CreatedAt: at}}
-	if err := exportObjections(path, true, more); err != nil {
+	if err := exportObjections(path, true, []ingest.Objection{first, second}); err != nil {
 		t.Fatal(err)
 	}
 	f, _ := os.Open(path)
 	defer f.Close()
 	if got, err := readObjections(f); err != nil || len(got) != 2 {
 		t.Fatalf("after --overwrite: %v %v", got, err)
+	}
+	// a file that is not a backup is never replaced either
+	junk := filepath.Join(filepath.Dir(path), "notes.txt")
+	if err := os.WriteFile(junk, []byte("not a backup\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := exportObjections(junk, true, []ingest.Objection{first}); err == nil {
+		t.Fatal("a file that is not a backup was replaced")
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".objections-*")); len(left) != 0 {
 		t.Fatalf("temporary files left behind: %v", left)

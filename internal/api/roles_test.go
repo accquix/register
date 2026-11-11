@@ -109,6 +109,30 @@ WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'p') AND c.relname <> 'go
 	if _, err := ingest.ListObjections(ctx, operator); err != nil {
 		t.Fatalf("operator: export: %v", err)
 	}
+	// release one link and withdraw the release; restore a backup
+	ids, _ = ingest.ActiveObjections(ctx, operator, "99900002")
+	if _, err := ingest.ReleaseLink(ctx, operator, ids[0], striebro.ID, "ticket 3", true); err != nil {
+		t.Fatalf("operator: release: %v", err)
+	}
+	if _, err := ingest.ReleaseLink(ctx, operator, ids[0], striebro.ID, "", false); err != nil {
+		t.Fatalf("operator: unrelease: %v", err)
+	}
+	at := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+	if _, err := ingest.RestoreObjections(ctx, operator, []ingest.Objection{{Key: "r900000003", CreatedAt: at,
+		Links: []ingest.Link{{RecordID: striebro.ID, Basis: ingest.BasisRestored, CreatedAt: at, ReleasedAt: &at}}}}); err != nil {
+		t.Fatalf("operator: restore: %v", err)
+	}
+	// a daily file after the objections: the sync links a new carrier of the objected IČO
+	twin := testkit.Company(12, "Strieborná Rybka Dva, a.s.")
+	twin.ICO = striebro.ICO
+	b.PutDaily(day(0), []testkit.Rec{twin})
+	if err := syncer.NewRPO(syncConn, rcfg).Run(ctx); err != nil {
+		t.Fatalf("sync role: daily with a link: %v", err)
+	}
+	var linked int
+	if err := owner.QueryRow(ctx, `SELECT count(*) FROM objection_record WHERE rpo_id = $1 AND basis = 'carried_ico'`, twin.ID).Scan(&linked); err != nil || linked != 1 {
+		t.Fatalf("sync role: the new carrier was not linked: %d %v", linked, err)
+	}
 
 	// --- the API role serves search (default and fuzzy) and lookup
 	pc, err := pgxpool.ParseConfig(dsn)
@@ -159,12 +183,16 @@ WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'p') AND c.relname <> 'go
 	for _, sql := range []string{
 		`INSERT INTO objection (ico) VALUES ('99900009')`, `UPDATE objection SET revoked_at = now() WHERE id = 1`,
 		`DELETE FROM objection WHERE id = 1`, `TRUNCATE objection`, `DELETE FROM objection_record WHERE rpo_id = 1`,
+		`SELECT reason FROM objection`, `SELECT released_reason FROM objection_record`,
+		`UPDATE objection_record SET released_at = now() WHERE rpo_id = 1`,
 		`UPDATE register_setup SET objections_confirmed_at = now() WHERE only_row`, `CREATE TABLE public.t (x int)`,
 	} {
 		denied(syncRole, sql)
 	}
 	for _, sql := range []string{
 		`UPDATE rpo_record SET name = 'x' WHERE id = 1`, `DELETE FROM objection WHERE id = 1`, `TRUNCATE objection`,
+		`UPDATE objection SET created_at = now() WHERE id = 1`, `UPDATE objection SET reason = 'x' WHERE id = 1`, `UPDATE objection SET ico = '99900001' WHERE id = 1`,
+		`DELETE FROM objection_record WHERE rpo_id = 1`, `UPDATE objection_record SET basis = 'at_objection' WHERE rpo_id = 1`,
 		`UPDATE sync_source SET state = 'empty' WHERE source = 'rpo'`, `INSERT INTO fs_vat_payer (vkey, ic_dph, paragraph, source_as_of, row_hash) VALUES ('x', 'SK2099999999', '§4', now(), '\x00')`,
 	} {
 		denied(opRole, sql)

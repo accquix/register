@@ -58,7 +58,10 @@ modes:
   suppress --subject ICO [--reason TEXT]
                                   record an objection: keep a subject out of name search
   suppress --undo --id N          revoke one objection (or --undo --subject ICO when it has one)
-  suppress --list                 print every objection with its id
+  suppress --list [--id N]        print every objection; with --id, the records it covers and why
+  suppress --release --id N --record R [--reason TEXT]
+                                  exclude one record from an objection (a wrong link); it stays
+                                  excluded until --unrelease --id N --record R
   suppress --export --output FILE [--overwrite]
                                   write the backup of the objections
   suppress --restore FILE         put a backup back ("-" reads standard input)
@@ -404,27 +407,33 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 	subject := fset.String("subject", "", "the subject's IČO (or r<RPO id> for one record)")
 	reason := fset.String("reason", "", "operator note, e.g. a ticket number; never personal data")
 	undo := fset.Bool("undo", false, "revoke an objection: with --id, or with --subject when it has exactly one")
-	id := fset.Int64("id", 0, "with --undo: the objection to revoke (see --list)")
-	list := fset.Bool("list", false, "print every objection")
+	id := fset.Int64("id", 0, "the objection's number (see --list)")
+	record := fset.Int64("record", 0, "with --release or --unrelease: the RPO record id")
+	release := fset.Bool("release", false, "exclude one record from an objection (--id N --record R)")
+	unrelease := fset.Bool("unrelease", false, "withdraw the exclusion of a record (--id N --record R)")
+	list := fset.Bool("list", false, "print every objection; with --id N, its links")
 	export := fset.Bool("export", false, "write the backup of the objections to --output")
 	output := fset.String("output", "", "with --export: the file to write (never overwritten without --overwrite)")
-	overwrite := fset.Bool("overwrite", false, "with --export: replace an existing file")
+	overwrite := fset.Bool("overwrite", false, "with --export: replace an existing backup that the new one contains")
 	restore := fset.String("restore", "", "restore objections from a backup (- for standard input)")
 	initEmpty := fset.Bool("init-empty", false, "confirm a new installation with no objections to restore")
 	if err := fset.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
+	add := *subject != "" && !*undo
 	modes := 0
-	for _, on := range []bool{*subject != "" && !*undo, *undo, *list, *export, *restore != "", *initEmpty} {
+	for _, on := range []bool{add, *undo, *release, *unrelease, *list, *export, *restore != "", *initEmpty} {
 		if on {
 			modes++
 		}
 	}
 	switch {
 	case modes != 1 || fset.NArg() > 0:
-		return fmt.Errorf("%w: suppress: --subject needs an IČO (8 digits) or r<RPO id>; or use one of --undo, --list, --export, --restore, --init-empty", errUsage)
+		return fmt.Errorf("%w: suppress: --subject needs an IČO (8 digits) or r<RPO id>; or use one of --undo, --release, --unrelease, --list, --export, --restore, --init-empty", errUsage)
 	case *undo && (*id > 0) == (*subject != ""):
 		return fmt.Errorf("%w: suppress --undo needs --id N or --subject", errUsage)
+	case (*release || *unrelease) && (*id <= 0 || *record <= 0 || *subject != ""):
+		return fmt.Errorf("%w: suppress --release and --unrelease need --id N --record R", errUsage)
 	case *export && *output == "":
 		return fmt.Errorf("%w: suppress --export needs --output FILE", errUsage)
 	}
@@ -466,16 +475,13 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, "id\tsubject\trecorded\trevoked\tanchored records\treason")
-		for _, o := range rows {
-			revoked := "-"
-			if o.RevokedAt != nil {
-				revoked = o.RevokedAt.UTC().Format(time.RFC3339)
-			}
-			fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%d\t%s\n", o.ID, o.Key, o.CreatedAt.UTC().Format(time.RFC3339), revoked, len(o.Anchors), o.Reason)
-		}
-		return nil
+		return printObjections(stdout, rows, *id)
 	case *export:
+		if ok, err := ingest.SetupConfirmed(ctx, conn); err != nil {
+			return err
+		} else if !ok {
+			return errors.New("the objections of this installation are not confirmed (suppress --restore or --init-empty): an export now could replace a real backup with an empty list")
+		}
 		rows, err := ingest.ListObjections(ctx, conn)
 		if err != nil {
 			return err
@@ -498,6 +504,21 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 		}
 		fmt.Fprintln(stdout, "confirmed: a new installation with no objections to restore")
 		return nil
+	case *release, *unrelease:
+		hidden, err := ingest.ReleaseLink(ctx, conn, *id, *record, *reason, *release)
+		if err != nil {
+			return err
+		}
+		what := "released from"
+		if *unrelease {
+			what = "linked again to"
+		}
+		state := "it is in name search now (if it is an active record)"
+		if hidden {
+			state = "it is kept out of name search (an objection covers it)"
+		}
+		fmt.Fprintf(stdout, "record %d %s objection #%d; %s\n", *record, what, *id, state)
+		return nil
 	case *undo:
 		if *id == 0 {
 			ids, err := ingest.ActiveObjections(ctx, conn, key)
@@ -509,35 +530,92 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 			}
 			*id = ids[0]
 		}
-		still, err := ingest.RevokeObjection(ctx, conn, *id)
+		c, err := ingest.RevokeObjection(ctx, conn, *id)
 		if err != nil {
 			return err
 		}
-		if len(still) > 0 {
-			fmt.Fprintf(stdout, "objection #%d revoked; the subject is STILL kept out of name search by objection(s) %v\n", *id, still)
-		} else {
-			fmt.Fprintf(stdout, "objection #%d revoked; back in name search\n", *id)
+		switch c.Hidden {
+		case 0:
+			fmt.Fprintf(stdout, "objection #%d revoked; its %d record(s) are back in name search\n", *id, c.Records)
+		case c.Records:
+			fmt.Fprintf(stdout, "objection #%d revoked; all %d record(s) are STILL kept out of name search by other objections (see --list)\n", *id, c.Records)
+		default:
+			fmt.Fprintf(stdout, "objection #%d revoked; %d of its %d record(s) are STILL kept out of name search by other objections (see --list)\n", *id, c.Hidden, c.Records)
 		}
 		return nil
 	}
-	oid, records, err := ingest.AddObjection(ctx, conn, key, *reason)
+	oid, c, err := ingest.AddObjection(ctx, conn, key, *reason)
 	if err != nil {
 		return err
 	}
-	if records == 0 {
+	if c.Records == 0 {
 		fmt.Fprintf(stdout, "objection #%d recorded; no record matches %s yet, it applies when one appears. Check the identifier\n", oid, key)
 	} else {
-		fmt.Fprintf(stdout, "objection #%d recorded; %d record(s) kept out of name search; exact lookup is unaffected\n", oid, records)
+		fmt.Fprintf(stdout, "objection #%d recorded; %d record(s) kept out of name search; exact lookup is unaffected\n", oid, c.Hidden)
 	}
 	return nil
 }
 
+// printObjections prints the list; with id > 0, the links of that objection: which records it
+// covers, why (the basis and the sync unit that showed the record), and which are released.
+func printObjections(w io.Writer, rows []ingest.Objection, id int64) error {
+	stamp := func(t *time.Time) string {
+		if t == nil {
+			return "-"
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+	if id == 0 {
+		fmt.Fprintln(w, "id\tsubject\trecorded\trevoked\tlinks (operator/sync/released)\treason")
+		for _, o := range rows {
+			var byOperator, bySync, released int
+			for _, l := range o.Links {
+				switch {
+				case l.ReleasedAt != nil:
+					released++
+				case l.Basis == ingest.BasisCarriedICO:
+					bySync++
+				default:
+					byOperator++
+				}
+			}
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d/%d/%d\t%s\n", o.ID, o.Key, stamp(&o.CreatedAt), stamp(o.RevokedAt), byOperator, bySync, released, o.Reason)
+		}
+		return nil
+	}
+	for _, o := range rows {
+		if o.ID != id {
+			continue
+		}
+		fmt.Fprintf(w, "objection #%d\tsubject %s\trecorded %s\trevoked %s\t%s\n", o.ID, o.Key, stamp(&o.CreatedAt), stamp(o.RevokedAt), o.Reason)
+		fmt.Fprintln(w, "record\tbasis\tsource\tlinked\treleased\trelease note")
+		for _, l := range o.Links {
+			source := l.Source
+			if source == "" {
+				source = "-"
+			}
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", l.RecordID, l.Basis, source, stamp(&l.CreatedAt), stamp(l.ReleasedAt), l.ReleasedReason)
+		}
+		return nil
+	}
+	return fmt.Errorf("no objection #%d", id)
+}
+
 // The backup of the objections: one tab-separated line per objection (key, recorded at, revoked at
-// or "-", anchored record ids, reason), then a trailer with the row count and the SHA-256 of the
-// lines before it. The trailer detects a truncated or damaged file. It does not prove who wrote
-// the file: anyone who can change the file can recompute it. Keep the file encrypted and with
-// restricted access: it lists the people who objected.
-const objectionTrailer = "#accquix-register-objections-v2"
+// or "-", its links as a JSON array, reason), then a trailer with the row count and the SHA-256 of
+// the lines before it. The trailer detects a truncated or damaged file. It does not prove who
+// wrote the file: anyone who can change the file can recompute it. Keep the file encrypted and
+// with restricted access: it lists the people who objected.
+const objectionTrailer = "#accquix-register-objections-v3"
+
+type backupLink struct {
+	Record   int64      `json:"record"`
+	Basis    string     `json:"basis"`
+	Source   string     `json:"source,omitempty"`
+	Linked   time.Time  `json:"linked"`
+	Released *time.Time `json:"released,omitempty"`
+	Note     string     `json:"note,omitempty"`
+}
 
 func objectionLine(o ingest.Objection) string {
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
@@ -545,11 +623,12 @@ func objectionLine(o ingest.Objection) string {
 	if o.RevokedAt != nil {
 		revoked = o.RevokedAt.UTC().Format(time.RFC3339Nano)
 	}
-	anchors := make([]string, len(o.Anchors))
-	for i, a := range o.Anchors {
-		anchors[i] = strconv.FormatInt(a, 10)
+	links := make([]backupLink, 0, len(o.Links))
+	for _, l := range o.Links {
+		links = append(links, backupLink{l.RecordID, l.Basis, l.Source, l.CreatedAt.UTC(), l.ReleasedAt, l.ReleasedReason})
 	}
-	return strings.Join([]string{o.Key, o.CreatedAt.UTC().Format(time.RFC3339Nano), revoked, strings.Join(anchors, ","), clean(o.Reason)}, "\t") + "\n"
+	b, _ := json.Marshal(links) // JSON escapes tabs and line breaks
+	return strings.Join([]string{o.Key, o.CreatedAt.UTC().Format(time.RFC3339Nano), revoked, string(b), clean(o.Reason)}, "\t") + "\n"
 }
 
 func writeObjections(w io.Writer, rows []ingest.Objection) error {
@@ -566,15 +645,27 @@ func writeObjections(w io.Writer, rows []ingest.Objection) error {
 }
 
 // exportObjections writes the backup atomically: to a temporary file in the same directory, synced,
-// then renamed. An existing file is replaced only with overwrite, and never by an empty backup:
-// that is what a rebuilt, empty database would produce, over the only good copy.
+// then renamed. An existing file is replaced only with overwrite, and only when it is a valid
+// backup whose every objection is also in the new one. A backup can therefore only grow: an empty
+// or rebuilt database can never replace the copy that still holds the objections it lost.
 func exportObjections(path string, overwrite bool, rows []ingest.Objection) error {
-	if _, err := os.Stat(path); err == nil {
-		if !overwrite {
+	if f, err := os.Open(path); err == nil {
+		old, rerr := readObjections(f)
+		f.Close()
+		switch {
+		case !overwrite:
 			return fmt.Errorf("%s exists; pass --overwrite to replace it", path)
+		case rerr != nil:
+			return fmt.Errorf("%s is not a valid backup (%w); refusing to replace it, write to a new file", path, rerr)
 		}
-		if len(rows) == 0 {
-			return fmt.Errorf("the database has no objections; refusing to replace %s with an empty backup", path)
+		have := map[string]bool{}
+		for _, o := range rows {
+			have[o.Key+" "+o.CreatedAt.UTC().Format(time.RFC3339Nano)] = true
+		}
+		for _, o := range old {
+			if !have[o.Key+" "+o.CreatedAt.UTC().Format(time.RFC3339Nano)] {
+				return fmt.Errorf("%s holds an objection that this database does not have; refusing to replace it. Restore it first (suppress --restore), or write to a new file", path)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -643,14 +734,20 @@ func readObjections(r io.Reader) ([]ingest.Objection, error) {
 			}
 			o.RevokedAt = &at
 		}
-		if f[3] != "" {
-			for _, a := range strings.Split(f[3], ",") {
-				n, err := strconv.ParseInt(a, 10, 64)
-				if err != nil || n <= 0 {
-					return nil, bad
-				}
-				o.Anchors = append(o.Anchors, n)
+		var links []backupLink
+		if err := json.Unmarshal([]byte(f[3]), &links); err != nil {
+			return nil, bad
+		}
+		for _, l := range links {
+			switch l.Basis {
+			case ingest.BasisAtObjection, ingest.BasisCarriedICO, ingest.BasisRestored, ingest.BasisMigrated:
+			default:
+				return nil, bad
 			}
+			if l.Record <= 0 {
+				return nil, bad
+			}
+			o.Links = append(o.Links, ingest.Link{RecordID: l.Record, Basis: l.Basis, Source: l.Source, CreatedAt: l.Linked, ReleasedAt: l.Released, ReleasedReason: l.Note})
 		}
 		h.Write([]byte(line))
 		out = append(out, o)

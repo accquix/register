@@ -17,14 +17,20 @@ import (
 
 const skeyExpr = `CASE WHEN r.ico IS NOT NULL THEN r.ico ELSE 'r' || r.id END`
 
-// notSuppressed keeps a record out of the search layer while an active objection covers it: one
-// that names the IČO the record carries now, names the record itself, or is anchored to it
-// (migration 00003). It is evaluated per record against the current data; nothing is copied to
-// other keys, so a wrong IČO in a source file never hides the subject that really owns that IČO.
-const notSuppressed = `NOT EXISTS (SELECT 1 FROM objection o WHERE o.revoked_at IS NULL AND o.ico = r.ico)
-    AND NOT EXISTS (SELECT 1 FROM objection o WHERE o.revoked_at IS NULL AND o.rpo_id = r.id)
+// notSuppressed keeps a record out of the search layer while an active objection covers it
+// (migrations 00003 and 00005). An objection covers a record when it
+//   - names the record itself, or
+//   - has a link to it that the operator has not released, or
+//   - names the IČO the record carries now, unless the operator released that very pair.
+//
+// It is evaluated per record. A link never extends to other records that share the record's new
+// IČO, so a wrong IČO in a source file cannot hide the subject that really owns it.
+const notSuppressed = `NOT EXISTS (SELECT 1 FROM objection o WHERE o.revoked_at IS NULL AND o.rpo_id = r.id)
     AND NOT EXISTS (SELECT 1 FROM objection_record a JOIN objection o ON o.id = a.objection_id
-                    WHERE a.rpo_id = r.id AND o.revoked_at IS NULL)`
+                    WHERE a.rpo_id = r.id AND a.released_at IS NULL AND o.revoked_at IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM objection o WHERE o.revoked_at IS NULL AND o.ico = r.ico
+                    AND NOT EXISTS (SELECT 1 FROM objection_record a
+                                    WHERE a.objection_id = o.id AND a.rpo_id = r.id AND a.released_at IS NOT NULL))`
 
 // objectionLock serialises everything that reads the objections to build search rows with
 // everything that changes them. Without it, an objection recorded while a unit is being applied
@@ -39,25 +45,40 @@ func lockObjections(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-// anchorNewRecords anchors each active objection by IČO to the records that were created with
-// that IČO (first seen and never changed since, so they cannot have got it by a later change).
-// An existing record that changes to the IČO is hidden while it carries it, but is not anchored:
-// if that change was a mistake in the source, its correction ends the effect.
-const anchorNewRecords = `INSERT INTO objection_record (objection_id, rpo_id)
-SELECT o.id, r.id FROM objection o JOIN rpo_record r ON r.ico = o.ico
-WHERE o.revoked_at IS NULL AND r.first_seen_at = r.changed_at AND r.first_seen_at >= o.created_at
-ON CONFLICT DO NOTHING`
+// linkCarriers links each active objection by IČO to every record that carries the IČO and has
+// no link yet. There is no condition on when the record or the objection was created: whichever
+// of the two commits first, the other one sees it here, under the lock. A released link is a row
+// too, so a released record is never linked again.
+const linkCarriers = `INSERT INTO objection_record (objection_id, rpo_id, basis, source)
+SELECT o.id, r.id, $1, nullif($2, '') FROM objection o JOIN rpo_record r ON r.ico = o.ico
+WHERE o.revoked_at IS NULL
+ON CONFLICT DO NOTHING
+RETURNING objection_id`
 
-// syncObjections takes the objection lock and anchors new records. Every writer of the search
-// tables calls it before it reads the objections.
-func syncObjections(ctx context.Context, tx pgx.Tx) error {
+// syncObjections takes the objection lock and links the records that carry an objected IČO. It
+// returns, per objection, how many links it added. Every unit calls it after its merge, and every
+// writer of the search tables calls it before reading the objections, so after any commit this
+// holds: a record that carries an objected IČO is linked (or released).
+func syncObjections(ctx context.Context, tx pgx.Tx, basis, source string) (map[int64]int, error) {
 	if err := lockObjections(ctx, tx); err != nil {
-		return err
+		return nil, err
 	}
-	if _, err := tx.Exec(ctx, anchorNewRecords); err != nil {
-		return fmt.Errorf("objection anchors: %w", err)
+	rows, err := tx.Query(ctx, linkCarriers, basis, source)
+	if err != nil {
+		return nil, fmt.Errorf("objection links: %w", err)
 	}
-	return nil
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return nil, fmt.Errorf("objection links: %w", err)
+	}
+	var added map[int64]int
+	for _, id := range ids {
+		if added == nil {
+			added = map[int64]int{}
+		}
+		added[id]++
+	}
+	return added, nil
 }
 
 // searchNameSelect builds the rows for search_name. filter limits the records read; the outer
@@ -89,7 +110,7 @@ func createTouched(ctx context.Context, tx pgx.Tx) error {
 // refreshTouched rebuilds the search rows of the subjects listed in the temp table "touched" and
 // recomputes the dictionary counts of every word they had or have.
 func refreshTouched(ctx context.Context, tx pgx.Tx) error {
-	if err := syncObjections(ctx, tx); err != nil {
+	if _, err := syncObjections(ctx, tx, "carried_ico", ""); err != nil {
 		return err
 	}
 	stmts := []string{
@@ -118,7 +139,7 @@ ON CONFLICT (word) DO UPDATE SET freq = EXCLUDED.freq`,
 
 // RebuildSearch replaces the whole search layer from rpo_record. Used when a bootstrap publishes.
 func RebuildSearch(ctx context.Context, tx pgx.Tx) error {
-	if err := syncObjections(ctx, tx); err != nil {
+	if _, err := syncObjections(ctx, tx, "carried_ico", "rebuild"); err != nil {
 		return err
 	}
 	stmts := []string{

@@ -67,14 +67,17 @@ subject/search layer that `sync` maintains in the same unit transaction.
   the adaptive word step and the fuzzy correction.
 - After each unit, `sync` recomputes these rows for the subjects the unit touched.
 - Only active subjects are in the search layer; terminated subjects are reachable by exact lookup.
-  Records covered by an active objection are left out of the search layer only (D31). An
-  objection (`objection`) names an IČO or one RPO record and is anchored (`objection_record`) to
-  the records that carried the IČO when it was recorded and to records later created with it. A
-  record is hidden when an active objection names its current IČO, names the record, or is
-  anchored to it. This is computed per record from the current data; nothing is copied onto other
-  identifiers. The search queries filter on the suppressed keys again, and fuzzy search never
-  offers a word that only suppressed subjects use. Changes to objections and rebuilds of search
-  rows are serialised by an advisory lock.
+  Records covered by an active objection are left out of the search layer only (D31, D42). An
+  objection (`objection`) is the person's request: it names an IČO or one RPO record. A link
+  (`objection_record`) says the objection covers one record, with its basis, the sync unit that
+  caused it and when. The operator's command links the records that carry the IČO then; every
+  sync unit links the records it sees carrying it. A record is hidden while an active objection
+  names it, has an unreleased link to it, or names the IČO it carries now and that pair is not
+  released. A link stays when the record changes its IČO and never extends to other records with
+  the new IČO. The operator can release one link; the released row stays, so the sync does not
+  link the record again. The search queries filter on the suppressed keys again, and fuzzy search
+  never offers a word that only suppressed subjects use. Changes to objections and every unit's
+  merge-and-refresh are serialised by an advisory lock.
 
 ### Normalisation rules (pure Go, shared by ingest and search)
 

@@ -16,7 +16,8 @@ This page lists what is implemented so far. It grows with each stage.
 | `accquix-register sync --unblock --source rpo` or `--source fs:<list>` | After a validation block: restores the previous state. Run it once the cause is understood |
 | `accquix-register suppress --subject <IČO> [--reason TEXT]` | Records an objection: keeps a subject out of name search. The subject is an IČO, or `r<RPO id>` for one record. It prints the objection's number and how many records it covers. It waits for a sync unit that is being applied |
 | `accquix-register suppress --undo --id N` | Revokes one objection (or `--undo --subject <IČO>` when the subject has exactly one). It says whether another objection still hides the subject |
-| `accquix-register suppress --list` | Prints every objection with its number, revoked ones included |
+| `accquix-register suppress --list [--id N]` | Prints every objection with its number, revoked ones included; with `--id`, its links: the record, the basis, the file that caused the link, and whether it is released |
+| `accquix-register suppress --release --id N --record R [--reason TEXT]` | Excludes one record from an objection (a wrong link). The exclusion stays until `--unrelease --id N --record R`, so the sync does not link the record again |
 | `accquix-register suppress --export --output FILE [--overwrite]` | Writes the backup of the objections atomically. An existing file is replaced only with `--overwrite`, and never by an empty export. Keep the file private |
 | `accquix-register suppress --restore FILE` | Puts a backup back (`-` reads standard input) and confirms the installation. It only adds |
 | `accquix-register suppress --init-empty` | Confirms a new installation with no objections to restore. Until this or a restore, the API answers `503 reason=setup` |

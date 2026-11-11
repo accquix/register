@@ -375,9 +375,9 @@ func TestAPI(t *testing.T) {
 
 	t.Run("objection keeps a subject out of name search only", func(t *testing.T) {
 		conn := testkit.Conn(t, dsn)
-		id, records, err := ingest.AddObjection(context.Background(), conn, "99900002", "ticket-1")
-		if err != nil || records != 1 {
-			t.Fatalf("add: %d records, %v", records, err)
+		id, cov, err := ingest.AddObjection(context.Background(), conn, "99900002", "ticket-1")
+		if err != nil || cov.Records != 1 || cov.Hidden != 1 {
+			t.Fatalf("add: %+v, %v", cov, err)
 		}
 		_, _, m := e.get(t, "/v1/search?q=rybka", true)
 		if strings.Contains(strings.Join(names(m), "|"), "Strieborná") {
@@ -386,8 +386,8 @@ func TestAPI(t *testing.T) {
 		if code, _, _ := e.get(t, "/v1/lookup/99900002", true); code != 200 {
 			t.Fatalf("exact lookup of a suppressed subject: %d", code)
 		}
-		if still, err := ingest.RevokeObjection(context.Background(), conn, id); err != nil || len(still) != 0 {
-			t.Fatalf("revoke: %v %v", still, err)
+		if cov, err := ingest.RevokeObjection(context.Background(), conn, id); err != nil || cov.Hidden != 0 {
+			t.Fatalf("revoke: %+v %v", cov, err)
 		}
 		_, _, m = e.get(t, "/v1/search?q=rybka", true)
 		if !strings.Contains(strings.Join(names(m), "|"), "Strieborná") {

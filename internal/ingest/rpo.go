@@ -31,13 +31,25 @@ type RPOUnit struct {
 	// also the order the files are applied in. Zero means the file's exportDate. The exportDate is
 	// stored as source_as_of either way.
 	OrderDate time.Time
+	// OnStage, when set, is called inside the unit's transaction after each stage: "staged" (COPY
+	// done), "merged" (rpo_record written), "refreshed" (search rows written, about to commit).
+	// Tests use it to stop a unit at an exact point; production leaves it nil.
+	OnStage   func(stage string)
 	CheckDate func(exportDate time.Time) error                         // nil = accept; an error rejects the unit before anything is staged
 	Validate  func(records int) error                                  // nil = accept; an error rejects the unit
 	After     func(ctx context.Context, tx pgx.Tx, r UnitResult) error // runs in the same transaction
 }
 
+func (u RPOUnit) stage(name string) {
+	if u.OnStage != nil {
+		u.OnStage(name)
+	}
+}
+
 // UnitResult describes an applied unit.
 type UnitResult struct {
+	// Linked: objection id → records this unit linked to it, because they carry its IČO.
+	Linked     map[int64]int
 	Records    int
 	Inserted   int
 	Updated    int
@@ -147,6 +159,7 @@ func ApplyRPO(ctx context.Context, conn *pgx.Conn, u RPOUnit) (UnitResult, error
 		return res, fmt.Errorf("copy %s: %w", u.Name, err)
 	}
 	res.Records = dec.Count()
+	u.stage("staged")
 	if u.Validate != nil {
 		if err := u.Validate(res.Records); err != nil {
 			return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, err)
@@ -169,6 +182,13 @@ func ApplyRPO(ctx context.Context, conn *pgx.Conn, u RPOUnit) (UnitResult, error
 	if err := tx.QueryRow(ctx, mergeRPO).Scan(&res.Inserted, &res.Updated); err != nil {
 		return res, fmt.Errorf("merge %s: %w", u.Name, err)
 	}
+	u.stage("merged")
+	// Link the records that now carry an objected IČO, in every unit (also in a bootstrap, which
+	// builds the search layer only at the end): a record must be linked while it carries the IČO,
+	// or the objection is lost when a later unit changes it.
+	if res.Linked, err = syncObjections(ctx, tx, "carried_ico", u.Name); err != nil {
+		return res, err
+	}
 	if u.RefreshSearch {
 		if err := refreshTouched(ctx, tx); err != nil {
 			return res, err
@@ -186,6 +206,7 @@ ON CONFLICT (unit) DO UPDATE SET sha256 = EXCLUDED.sha256, records = EXCLUDED.re
 			return res, err
 		}
 	}
+	u.stage("refreshed")
 	return res, tx.Commit(ctx)
 }
 
