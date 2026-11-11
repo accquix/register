@@ -18,7 +18,7 @@ GET /v1/lookup/{id}
 
 ## Príklad
 
-```json title="GET /v1/lookup/99900001 (skrátené)"
+```json title="GET /v1/lookup/99900001 (skrátené)" {7-8,24,29}
 {
   "type": "ico",
   "subjects": [
@@ -50,6 +50,9 @@ GET /v1/lookup/{id}
   "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
 }
 ```
+
+Zvýraznené riadky čítajte ako prvé: `state` a `source` každej časti (ako istá je odpoveď a k akému dátumu),
+paragraf DPH s `payer` a uvedenie zdroja, ktoré musíte zobraziť spolu s dátami.
 
 ## Časti odpovede
 

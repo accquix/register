@@ -2,6 +2,7 @@ import { defineConfig } from "blume";
 import { openapi } from "blume/reference";
 
 const inter = { name: "Inter", provider: "google" as const, subsets: ["latin", "latin-ext"], weights: [400, 500, 600, 700] };
+const onest = { name: "Onest", provider: "google" as const, subsets: ["latin", "latin-ext"], weights: [500, 600, 700] };
 
 export default defineConfig({
   title: "Accquix Register",
@@ -20,25 +21,28 @@ export default defineConfig({
   },
   navigation: {
     tabs: [
-      { label: { en: "Guides", sk: "Návody" }, path: "/" },
+      { label: { en: "Docs", sk: "Dokumentácia" }, path: "/", href: "/quickstart" },
       { label: { en: "API reference", sk: "API referencia" }, path: "/reference" },
+      { label: { en: "Changelog", sk: "Zmeny" }, path: "/changelog" },
     ],
     repo: true,
   },
   github: { owner: "accquix", repo: "register", branch: "main", dir: "site/docs" },
   footer: {
-    copyright: { en: "Code: Apache-2.0. Data: RPO © Ministerstvo vnútra SR, CC BY 4.0; Zdroj údajov: Finančná správa SR.", sk: "Kód: Apache-2.0. Dáta: RPO © Ministerstvo vnútra SR, CC BY 4.0; Zdroj údajov: Finančná správa SR." },
-    links: [
-      { label: "GitHub", href: "https://github.com/accquix/register" },
-      { label: "Accquix", href: "https://accquix.com" },
-    ],
+    copyright: {
+      en: "Code: Apache-2.0 · RPO © MV SR, CC BY 4.0 · Zdroj údajov: Finančná správa SR",
+      sk: "Kód: Apache-2.0 · RPO © MV SR, CC BY 4.0 · Zdroj údajov: Finančná správa SR",
+    },
+    // The repository icon on the right already links to GitHub.
+    links: [{ label: "Accquix", href: "https://accquix.com" }],
   },
   theme: {
-    accent: { light: "#0d74ce", dark: "#70b8ff" },
+    // Interfere Design System brand blue; light mode darkened for AA contrast.
+    accent: { light: "#006ad6", dark: "#3c9fff" },
     radius: "md",
     mode: "system",
     toggle: true,
-    fonts: { display: inter, body: inter, mono: "ibm-plex-mono" },
+    fonts: { display: onest, body: inter, mono: "ibm-plex-mono" },
   },
   reference: [
     openapi({
@@ -48,6 +52,16 @@ export default defineConfig({
       codeSamples: ["curl", "js", "python"],
     }),
   ],
+  changelog: {
+    title: { en: "Changelog", sk: "Zmeny" },
+    description: { en: "What changed in each version of Accquix Register.", sk: "Čo sa zmenilo v každej verzii Accquix Register." },
+  },
+  seo: {
+    og: {
+      logo: "/logo-dark.svg",
+      palette: { accent: "#3c9fff", background: "#0b0b0b", foreground: "#eeeeee", muted: "#b2b2b2", border: "#262626" },
+    },
+  },
   feedback: false,
   ai: { openInChat: false },
   deployment: { site: "https://register.accquix.com" },

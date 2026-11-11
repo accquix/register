@@ -11,9 +11,9 @@ Every lookup section carries a `state`:
 
 | State | Meaning |
 | --- | --- |
-| `present` | The source has a row for this subject. |
-| `absent` | The source is **fresh** and has no row. This is a fact as of the source's date. |
-| `unknown` | The source was never published, or it is stale. The register does not know. |
+| <State is="present" /> | The source has a row for this subject. |
+| <State is="absent" /> | The source is **fresh** and has no row. This is a fact as of the source's date. |
+| <State is="unknown" /> | The source was never published, or it is stale. The register does not know. |
 
 Values derived from a section follow the same rule. For example `vat.payer` is `true` or `false` only from a fresh
 list, and `null` otherwise.

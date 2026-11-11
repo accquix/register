@@ -11,9 +11,9 @@ Každá časť overenia má `state`:
 
 | Stav | Význam |
 | --- | --- |
-| `present` | Zdroj má k subjektu záznam. |
-| `absent` | Zdroj je **aktuálny** a záznam nemá. Je to fakt k dátumu zdroja. |
-| `unknown` | Zdroj ešte nebol zverejnený alebo je neaktuálny. Register to nevie. |
+| <State is="present" /> | Zdroj má k subjektu záznam. |
+| <State is="absent" /> | Zdroj je **aktuálny** a záznam nemá. Je to fakt k dátumu zdroja. |
+| <State is="unknown" /> | Zdroj ešte nebol zverejnený alebo je neaktuálny. Register to nevie. |
 
 Rovnako sa správajú aj hodnoty odvodené od časti. Napríklad `vat.payer` je `true` alebo `false` iba z aktuálneho
 zoznamu, inak `null`.

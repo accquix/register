@@ -3,33 +3,65 @@ title: Accquix Register
 sidebar:
   label: Úvod
 description: Vlastná prehľadávateľná kópia slovenských obchodných registrov s malým API na vyhľadávanie a overenie. Open source, prevádzka na vlastnej infraštruktúre, bez predplatného.
+mode: custom
 ---
 
-Accquix Register vytvára a udržiava **vašu vlastnú databázu slovenských firiem a živnostníkov** z oficiálnych
-verejných registrov a sprístupňuje ju cez malé HTTP API len na čítanie: jedno inteligentné vyhľadávacie pole a
-overenie podľa IČO, DIČ alebo IČ DPH.
+<Hero
+  eyebrow="Open source · Apache-2.0 · na vlastnej infraštruktúre"
+  title="Slovenské obchodné registre vo vašom PostgreSQL"
+  lead="Accquix Register zrkadlí register právnických osôb a zoznamy Finančnej správy do vašej databázy a sprístupňuje jedno inteligentné vyhľadávacie pole a overenie podľa IČO, DIČ alebo IČ DPH. Bez poplatkov za požiadavky, bez cudzích limitov."
+>
+  <LinkButton href="/sk/quickstart">Rýchly štart</LinkButton>
+  <LinkButton href="/sk/reference" variant="secondary">API referencia</LinkButton>
+  <LinkButton href="https://github.com/accquix/register" variant="secondary">GitHub</LinkButton>
+</Hero>
+
+<Section>
+  <Stats>
+    <Stat value="1–5 ms" label="bežné vyhľadávanie na skutočných dátach" />
+    <Stat value="≈1 milión" label="aktívnych firiem a živnostníkov" />
+    <Stat value="7 zdrojov" label="RPO a šesť zoznamov Finančnej správy" />
+    <Stat value="24 MB" label="jeden binárny súbor v Go v obraze" />
+  </Stats>
+</Section>
+
+<Section title="Spustenie tromi príkazmi" lead="Docker s compose, asi 10 GB miesta na disku a odchádzajúce HTTPS. Prvá synchronizácia trvá 10–20 minút, väčšinou sťahovanie.">
+
+```sh
+git clone https://github.com/accquix/register && cd register/deploy/compose
+./make-secrets.sh        # náhodné heslá a jeden API kľúč, vypíše sa raz
+docker compose up -d     # PostgreSQL, migrate, API na :8080, synchronizácia každú hodinu
+```
+
+</Section>
+
+<Section title="Kam ďalej">
+  <CardGroup cols={2}>
+    <Card title="Rýchly štart" icon="rocket" href="/sk/quickstart">
+      Spustite celé riešenie a pošlite prvé vyhľadávanie a overenie.
+    </Card>
+    <Card title="Ako to funguje" icon="workflow" href="/sk/concepts/how-it-works">
+      Zdroje, synchronizácia, vyhľadávacia vrstva a API, a čo každá časť garantuje.
+    </Card>
+    <Card title="Práca s API" icon="code" href="/sk/api/search">
+      Vyhľadávanie, overenie, sledovanie zmien, chyby a limity s príkladmi.
+    </Card>
+    <Card title="Vlastná prevádzka" icon="server" href="/sk/self-hosting/requirements">
+      Compose, Kubernetes, AWS a spravované PostgreSQL, roly a prevádzka.
+    </Card>
+  </CardGroup>
+</Section>
+
+<Section title="Prečo vznikol">
 
 Dáta sú verejné, no roztrúsené medzi úradmi, a komerčné API si účtujú za každú požiadavku alebo ročne. Bezplatné API
 Štatistického úradu, ktoré používalo mnoho nástrojov, prestalo odpovedať, keď register právnických osôb v júni 2026
 prešiel pod Ministerstvo vnútra. Accquix Register číta oficiálne hromadné súbory priamo, takže vaša inštancia
 nezávisí od cudzích limitov.
 
-<CardGroup cols={2}>
-  <Card title="Rýchly štart" icon="rocket" href="/sk/quickstart">
-    Spustite celé riešenie cez docker compose a pošlite prvú požiadavku približne za 15 minút.
-  </Card>
-  <Card title="Ako to funguje" icon="workflow" href="/sk/concepts/how-it-works">
-    Zdroje, synchronizácia, vyhľadávacia vrstva a API, a čo každá časť garantuje.
-  </Card>
-  <Card title="Práca s API" icon="code" href="/sk/api/search">
-    Vyhľadávanie, overenie, sledovanie zmien, chyby a limity s príkladmi.
-  </Card>
-  <Card title="API referencia" icon="book-open" href="/sk/reference">
-    Všetky endpointy, parametre a schémy odpovedí, generované z dokumentu OpenAPI.
-  </Card>
-</CardGroup>
+</Section>
 
-## Čo získate
+<Section title="Čo získate">
 
 - **Zrkadlo oficiálnych zdrojov** vo vašom PostgreSQL:
   - register právnických osôb (RPO) Ministerstva vnútra: názvy, adresy, právne formy, zápisy (súd, oddiel a
@@ -39,22 +71,27 @@ nezávisí od cudzích limitov.
 - **Jedno vyhľadávacie pole** pre názov, IČO, DIČ aj IČ DPH. Ignoruje diakritiku a poradie slov, nájde začiatok
   ktoréhokoľvek slova a voliteľne opraví preklepy.
 - **Overenie**, ktoré pri každej časti odpovede uvádza zdroj, dátum aktuálnosti a verziu na sledovanie zmien a
-  úprimne povie, keď niečo nevie.
-- **Jeden binárny súbor v Go** a obyčajný PostgreSQL. Obraz má 24 MB; `docker compose up` spustí všetko.
+  úprimne povie, keď niečo nevie: každá časť je <State is="present" />, <State is="absent" /> alebo
+  <State is="unknown" />.
+- **Jeden binárny súbor v Go** a obyčajný PostgreSQL 16–18 vrátane spravovaných poskytovateľov.
 
-## Čo to nie je
+</Section>
 
-:::note
+<Section title="Čo to nie je">
+
 - **Projekt nezverejňuje žiadne dáta.** Vaša inštancia si dáta sťahuje z oficiálnych zdrojov a vy ste
   prevádzkovateľom svojej kópie podľa GDPR. Pozrite [Dáta a súkromie](/sk/project/data-and-privacy).
 - **Žiadne verejné hostované API.** Prevádzkujte si vlastné.
 - **Žiadna história.** Register drží aktuálny stav každého záznamu a čas jeho poslednej zmeny.
 - **Nie je to orákulum platnosti DPH.** Uvádza, čo hovoria zoznamy Finančnej správy, a k akému dátumu. Pri IČ DPH
   iných štátov EÚ sa pýtajte priamo VIES.
-:::
 
-## Stav
+</Section>
+
+<Section title="Stav">
 
 Accquix Register je vo vývoji a zatiaľ nemá vydanie. Už teraz synchronizuje skutočné zdroje a obsluhuje API.
 Vyvíja a udržiava ho [Accquix](https://accquix.com) a zverejňuje pod licenciou Apache-2.0, aby ho mohol
 prevádzkovať ktokoľvek.
+
+</Section>

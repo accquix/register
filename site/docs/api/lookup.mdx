@@ -18,7 +18,7 @@ GET /v1/lookup/{id}
 
 ## Example
 
-```json title="GET /v1/lookup/99900001 (shortened)"
+```json title="GET /v1/lookup/99900001 (shortened)" {7-8,24,29}
 {
   "type": "ico",
   "subjects": [
@@ -50,6 +50,9 @@ GET /v1/lookup/{id}
   "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
 }
 ```
+
+The highlighted lines are the ones to read first: each section's `state` and `source` (how sure the answer is and
+as of when), the VAT paragraph with `payer`, and the attribution you must show with the data.
 
 ## Sections
 
