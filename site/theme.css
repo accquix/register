@@ -13,6 +13,7 @@
   --blume-border: oklch(0.905 0 0);
   --blume-code-background: oklch(1 0 0);
   --blume-action: #006ad6;
+  --blume-action-foreground: #ffffff;         /* 5.2:1 on the action blue (WCAG AA) */
 }
 
 :root[data-theme="dark"] {
@@ -23,6 +24,7 @@
   --blume-border: oklch(0.26 0 0);
   --blume-code-background: oklch(0.18 0 0);
   --blume-action: #0a72e6;                    /* brand blue, dark enough for white labels */
+  --blume-action-foreground: #ffffff;         /* 4.6:1 */
 }
 
 /* Footer: keep the attribution line readable at every width. */
