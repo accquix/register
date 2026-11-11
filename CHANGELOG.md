@@ -54,6 +54,10 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
   sync, the operator and the API; a compose variant for Coolify, Dokploy and similar platforms.
 - **Any PostgreSQL 16–18** with only `pg_trgm`: tested on plain PostgreSQL and on PlanetScale
   Postgres with `pg_strict` on.
+- **Release assets**: binaries for Linux and macOS (amd64, arm64), the image
+  `ghcr.io/accquix/register` for amd64 and arm64 with an SBOM and build provenance, and
+  `accquix-register-deploy_<version>.tar.gz` with the compose, PaaS and demo files pinned to the
+  released image (D49).
 
 ### Changed defaults
 
@@ -67,6 +71,15 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
 - API keys are stored only as SHA-256 hashes and compared in constant time; per-key rate limits;
   anonymous access is off by default and cannot look up natural persons by DIČ (D26).
 - The MCP endpoint refuses cross-origin browser requests (DNS rebinding).
-- The API's database role can only read; `serve` refuses to start on an outdated schema.
+- The API's database role can only read; `serve` refuses to start on an outdated schema;
+  `migrate` verifies the effective privileges of the roles, and an upgrade that changes what is
+  hidden rebuilds the search layer before serving (D45).
+- A snapshot is published only from one consistent set of content: a part replaced while it is
+  applied restarts the bootstrap or reconcile (D44).
+- Source files are parsed within fixed limits on download size, decompressed size, record size and
+  counts; the parsers of untrusted input have fuzz tests (D46).
+- Supply chain: every GitHub Action is pinned to a commit SHA, Dependabot updates modules, Actions,
+  base images and npm packages, and CI scans the image for fixable HIGH and CRITICAL
+  vulnerabilities (D47).
 - Objections are changed only by a separate operator role; the sync role cannot read their
   reasons, and the API role sees which keys are objected, nothing else (D33).

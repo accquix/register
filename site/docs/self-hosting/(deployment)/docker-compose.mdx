@@ -16,6 +16,22 @@ description: The reference deployment, its services, secrets and settings.
 every source **and** you confirmed the objections of the installation: `suppress --init-empty` on a new one,
 `suppress --restore` on a rebuilt one (see [Database](/self-hosting/database#back-up-the-objections)).
 
+## From a release
+
+Every release has `accquix-register-deploy_<version>.tar.gz` with this deployment, the
+[PaaS variant](/self-hosting/paas) and the [demo](/quickstart#try-the-demo), each pinned to the image of that
+version. You do not need the source code:
+
+```sh
+curl -fsSLO https://github.com/accquix/register/releases/download/v<version>/accquix-register-deploy_<version>.tar.gz
+tar -xzf accquix-register-deploy_<version>.tar.gz && cd accquix-register-deploy_<version>/compose
+./make-secrets.sh && docker compose up -d
+```
+
+Check the archive against `checksums.txt` of the same release. To upgrade, unpack the new version's archive next to
+the old one, copy your `secrets/` directory into it, and run `docker compose up -d` from the new directory: `migrate` runs
+first.
+
 ## Secrets
 
 There are no default credentials. `make-secrets.sh` creates the files in `secrets/`. Each process has its own

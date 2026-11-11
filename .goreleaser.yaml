@@ -32,6 +32,13 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: ./dist-extra/*.tar.gz
+
+release:
+  # the deployment files, made by deploy/package.sh in the release workflow
+  extra_files:
+    - glob: ./dist-extra/*.tar.gz
 
 changelog:
   sort: asc

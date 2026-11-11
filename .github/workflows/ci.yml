@@ -207,7 +207,15 @@ jobs:
           curl -fsS localhost:8080/readyz | grep -q demo
           curl -fsS 'localhost:8080/v1/search?q=zlata' | grep -q 'DEMO DATA'
           curl -fsS localhost:8080/v1/capabilities | grep -q '"demo":true'
-          docker compose -f deploy/demo/compose.yaml run --rm --no-deps demo sync && exit 1 || true
+          if docker compose -f deploy/demo/compose.yaml run --rm --no-deps demo sync; then echo 'sync accepted a demo database' >&2; exit 1; fi
+      - name: "the release's deployment archive is complete and its compose files are valid"
+        run: |
+          sh deploy/package.sh 0.0.0-ci "$RUNNER_TEMP/pkg"
+          tar -C "$RUNNER_TEMP/pkg" -xzf "$RUNNER_TEMP/pkg/accquix-register-deploy_0.0.0-ci.tar.gz"
+          d="$RUNNER_TEMP/pkg/accquix-register-deploy_0.0.0-ci"
+          if grep -q 'build:' "$d"/*/compose.yaml; then echo 'a build section was left' >&2; exit 1; fi
+          grep -q 'ghcr.io/accquix/register:0.0.0-ci' "$d/compose/compose.yaml"
+          docker compose -f "$d/demo/compose.yaml" config -q
       - name: logs on failure
         if: failure()
         run: docker compose -f deploy/demo/compose.yaml logs

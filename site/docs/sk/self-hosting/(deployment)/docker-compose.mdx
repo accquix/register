@@ -17,6 +17,21 @@ API je pripravené, keď prvá synchronizácia zverejní všetky zdroje **a** po
 `suppress --init-empty` na novej, `suppress --restore` na znova zostavenej (pozrite
 [Databáza](/sk/self-hosting/database)).
 
+## Z vydania
+
+Každé vydanie obsahuje `accquix-register-deploy_<verzia>.tar.gz` s týmto nasadením, [variantom pre
+PaaS](/sk/self-hosting/paas) a [demom](/sk/quickstart#vyskúšajte-demo), každé s obrazom danej verzie. Zdrojový kód
+nepotrebujete:
+
+```sh
+curl -fsSLO https://github.com/accquix/register/releases/download/v<verzia>/accquix-register-deploy_<verzia>.tar.gz
+tar -xzf accquix-register-deploy_<verzia>.tar.gz && cd accquix-register-deploy_<verzia>/compose
+./make-secrets.sh && docker compose up -d
+```
+
+Archív overte podľa `checksums.txt` toho istého vydania. Pri aktualizácii rozbaľte archív novej verzie vedľa starého,
+skopírujte do neho adresár `secrets/` a spustite `docker compose up -d` z nového adresára: najprv sa spustí `migrate`.
+
 ## Tajomstvá
 
 Žiadne predvolené prihlasovacie údaje neexistujú. `make-secrets.sh` vytvorí súbory v `secrets/`. Každý proces má
