@@ -26,7 +26,7 @@ Chyby sú dokumenty RFC 9457 `application/problem+json` so stálym kódom `code`
 | `forbidden` | 403 | Fyzická osoba podľa DIČ na inštancii s anonymným prístupom. |
 | `not_found` | 404 | Nenájdené a všetky použité zdroje sú aktuálne. |
 | `rate_limited` | 429 | Príliš veľa požiadaviek; pozrite `Retry-After`. |
-| `unavailable` | 503 | Pozrite `reason`: `bootstrapping`, `setup` (prevádzkovateľ ešte nepotvrdil inštanciu), `source_stale`, `timeout` alebo `database`. |
+| `unavailable` | 503 | Pozrite `reason`: `bootstrapping`, `setup` (prevádzkovateľ ešte nepotvrdil inštanciu), `source_stale`, `timeout`, `database` alebo `overloaded` (inštancia je na hranici výkonu: skúste znova po `Retry-After`). |
 
 `503` berte ako „neznáme“: skúste to neskôr a nikdy to neberte ako „nenájdené“.
 

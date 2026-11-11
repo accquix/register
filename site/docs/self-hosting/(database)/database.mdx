@@ -1,6 +1,8 @@
 ---
 title: Database
 description: Roles, connections, managed PostgreSQL providers, and the one table you must back up.
+sidebar:
+  label: Overview
 ---
 
 ## Roles
@@ -48,11 +50,29 @@ Then point each mode at its role:
 
 Never give `serve` a role that can write. Use `sslmode=verify-full` for managed databases.
 
+### The API connection pool
+
+`serve` opens at most **10** connections, unless the connection string sets `pool_max_conns`. When the database is
+not next to the API, this pool, not the database, can set the limit: one search runs several queries in a row, so at
+20 ms per round trip each connection carries about 7 searches a second. Set the size in the connection string,
+within the database's connection limit:
+
+```sh
+REGISTER_DATABASE_URL='postgresql://…@host:6432/register?sslmode=verify-full&pool_max_conns=12'
+```
+
+The instance runs at most as many data requests at once as it has connections. When it is full, a new request waits
+a quarter of a second and then gets `503` with `reason: overloaded` and `Retry-After`, so the admitted requests
+keep their speed instead of everyone timing out together.
+
+Through a transaction pooler such as PgBouncer, the client connections do not each hold a server connection: in the
+test on [PlanetScale Postgres](/self-hosting/planetscale), 21 client connections used at most 16 on the server.
+
 ## Managed providers
 
 | Provider | Notes |
 | --- | --- |
-| PlanetScale Postgres | Compatible with `pg_strict`: the register never runs `UPDATE` or `DELETE` without `WHERE`. Port 5432 for the sync, 6432 (PgBouncer) for the API. |
+| PlanetScale Postgres | Tested with the real data; see [PlanetScale Postgres](/self-hosting/planetscale). |
 | Neon | Works. On Launch plans the database has no IP allow-list, so rely on TLS and the role passwords. |
 | Supabase, RDS, plain PostgreSQL | Work as they are. |
 

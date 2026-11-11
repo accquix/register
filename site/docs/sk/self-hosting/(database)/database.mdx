@@ -1,6 +1,8 @@
 ---
 title: Databáza
 description: Roly, spojenia, spravované PostgreSQL a jediná tabuľka, ktorú musíte zálohovať.
+sidebar:
+  label: Prehľad
 ---
 
 ## Roly
@@ -48,11 +50,29 @@ Potom nasmerujte každý režim na jeho rolu:
 
 Režimu `serve` nikdy nedávajte rolu, ktorá môže zapisovať. Pri spravovaných databázach použite `sslmode=verify-full`.
 
+### Pool spojení API
+
+`serve` otvorí najviac **10** spojení, ak connection string nenastaví `pool_max_conns`. Keď databáza nie je hneď
+vedľa API, limit môže určovať tento pool, nie databáza: jedno vyhľadávanie spustí niekoľko dopytov za sebou, takže pri
+20 ms na jednu cestu tam a späť unesie každé spojenie asi 7 vyhľadávaní za sekundu. Veľkosť nastavte v connection
+stringu, v rámci limitu spojení databázy:
+
+```sh
+REGISTER_DATABASE_URL='postgresql://…@host:6432/register?sslmode=verify-full&pool_max_conns=12'
+```
+
+Inštancia vybavuje naraz najviac toľko dátových požiadaviek, koľko má spojení. Keď je plná, nová požiadavka čaká
+štvrť sekundy a potom dostane `503` s `reason: overloaded` a `Retry-After`, takže prijaté požiadavky si zachovajú
+rýchlosť a nevyprší čas všetkým naraz.
+
+Cez transakčný pooler, napríklad PgBouncer, nedrží každé klientske spojenie vlastné spojenie na serveri: v teste na
+[PlanetScale Postgres](/sk/self-hosting/planetscale) použilo 21 klientskych spojení na serveri najviac 16.
+
 ## Spravovaní poskytovatelia
 
 | Poskytovateľ | Poznámky |
 | --- | --- |
-| PlanetScale Postgres | Kompatibilné s `pg_strict`: register nikdy nespúšťa `UPDATE` ani `DELETE` bez `WHERE`. Port 5432 pre synchronizáciu, 6432 (PgBouncer) pre API. |
+| PlanetScale Postgres | Otestované na reálnych dátach; pozri [PlanetScale Postgres](/sk/self-hosting/planetscale). |
 | Neon | Funguje. Pri pláne Launch nemá databáza zoznam povolených IP, spoliehajte sa na TLS a heslá rolí. |
 | Supabase, RDS, obyčajný PostgreSQL | Fungujú bez úprav. |
 

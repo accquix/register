@@ -25,6 +25,7 @@ to a file holding the value; setting both is an error.
 | `suppress --init-empty` | Confirms a new installation with no objections to restore. |
 | `mcp --url URL` | MCP over stdio for a local AI client; forwards to the REST API at URL. See [AI agents (MCP)](/api/mcp). |
 | `mcp-tools` | Prints the MCP tool list. |
+| `demo` | Migrates, then loads fictional subjects into a new, empty database and marks it as a demo for good; `sync` then refuses it. See [Quick start](/quickstart#try-the-demo). |
 | `openapi` | Prints the OpenAPI 3.1 document. |
 | `version` | Prints the version. |
 
@@ -76,4 +77,6 @@ command-line mistake.
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches at once, per instance. |
 | `REGISTER_FUZZY_TIMEOUT` | `2s` | Timeout of a fuzzy search. |
 | `REGISTER_QUERY_TIMEOUT` | `3s` | Timeout of a default search or lookup. |
+| `REGISTER_MAX_IN_FLIGHT` | the pool size | Data requests the instance runs at once. Beyond that a request waits `REGISTER_ADMIT_WAIT`, then gets `503` with `reason: overloaded`, so an overloaded instance keeps serving at its capacity. |
+| `REGISTER_ADMIT_WAIT` | `250ms` | How long a request waits for a free slot. |
 | `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | The adaptive word step of the default search. |

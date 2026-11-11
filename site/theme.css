@@ -43,3 +43,9 @@
 .register-section-body > :last-child {
   margin-bottom: 0;
 }
+
+/* Inline-SVG card icons (vendor marks) sit in an inline-flex span on the text baseline, which adds the line's
+   descent below them; make the span a block-level flex box so they line up with the Lucide icons. */
+[data-blume-card] > div > div:first-child > span[style*="inline-flex"] {
+  display: flex !important;
+}

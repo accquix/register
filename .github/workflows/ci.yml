@@ -148,3 +148,19 @@ jobs:
         if: failure()
         working-directory: deploy/paas
         run: docker compose logs
+
+  demo-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "the demo starts with fictional data and says so"
+        run: |
+          docker compose -f deploy/demo/compose.yaml up -d --build --wait serve
+          test "$(docker compose -f deploy/demo/compose.yaml ps -a demo --format '{{.ExitCode}}')" = 0
+          curl -fsS localhost:8080/readyz | grep -q demo
+          curl -fsS 'localhost:8080/v1/search?q=zlata' | grep -q 'DEMO DATA'
+          curl -fsS localhost:8080/v1/capabilities | grep -q '"demo":true'
+          docker compose -f deploy/demo/compose.yaml run --rm --no-deps demo sync && exit 1 || true
+      - name: logs on failure
+        if: failure()
+        run: docker compose -f deploy/demo/compose.yaml logs

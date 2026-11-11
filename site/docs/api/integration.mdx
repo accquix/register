@@ -3,11 +3,34 @@ title: Integrating an application
 description: A checklist for using the register in an invoicing or accounting application.
 ---
 
+<Prompt description="Let your AI agent **integrate** company search and lookup into your application, following these rules." actions={["copy"]}>
+Integrate Accquix Register, a self-hosted API for the Slovak business registers, into this application, so that users can choose a company (a customer or a supplier) on forms such as invoices.
+
+The instance is at `https://register.example.internal` (ask me for the real address). Read its OpenAPI contract at `/openapi.json` and its limits at `/v1/capabilities` (send `Authorization: Bearer <key>`), and build a typed client from the contract instead of guessing fields. Keep the API key in configuration, never in code, tests or logs.
+
+Build it like this:
+
+1. A search box calls `GET /v1/search` as the user types: from 2–3 characters, with a debounce of about 250–300 ms, cancelling the previous request. Show the name, the IČO and the full address of each result, because different subjects can share a name.
+2. A search result is a candidate, not a fact. When the user picks one, call `GET /v1/lookup/{ico}` and fill the form only from that answer.
+3. Store the IČO and each section's `source.version` with the saved company. Later, look it up by IČO instead of searching again, and check for changes once a day with `POST /v1/lookup:batch`.
+
+Rules:
+
+- `503`, a section in state `unknown`, or a `stale` flag means the data is unknown, never "not found". Let the user continue with data they confirm; never block the document.
+- Treat a subject as a VAT payer only when `vat.payer` is `true`. §7 and §7a subjects have an IČ DPH but are not VAT payers. Show the as-of date next to VAT information.
+- An IČ DPH can belong to several subjects (a VAT group): let the user choose.
+- Identifiers are exact: never match or correct an IČO, DIČ or IČ DPH fuzzily.
+- When you show register data to other people, show the `attribution` texts from the response.
+- On `429`, wait for `Retry-After`; retry `GET` requests after connection errors with a backoff.
+
+Cover these rules with tests that use fictional companies only.
+</Prompt>
+
 The pattern that works for an application such as an invoicing tool:
 
 <Steps>
   <Step title="Search proposes">
-    Show `/v1/search` results as the user types, with a debounce. Show the name, the IČO and the municipality:
+    Show `/v1/search` results as the user types, with a debounce. Show the name, the IČO and the full address:
     two subjects can share a name.
   </Step>
   <Step title="Only an exact identifier resolves">

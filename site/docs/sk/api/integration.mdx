@@ -3,11 +3,34 @@ title: Integrácia do aplikácie
 description: Kontrolný zoznam na použitie registra vo fakturačnej alebo účtovnej aplikácii.
 ---
 
+<Prompt description="Nechajte svojho AI agenta **integrovať** vyhľadávanie a overenie firiem do aplikácie podľa týchto pravidiel." actions={["copy"]}>
+Integruj Accquix Register, API slovenských obchodných registrov na vlastnej infraštruktúre, do tejto aplikácie, aby si používatelia mohli vybrať firmu (odberateľa alebo dodávateľa) vo formulároch, napríklad na faktúrach.
+
+Inštancia beží na `https://register.example.internal` (opýtaj sa ma na skutočnú adresu). Prečítaj si jej kontrakt OpenAPI na `/openapi.json` a limity na `/v1/capabilities` (posielaj `Authorization: Bearer <kľúč>`) a z kontraktu vytvor typového klienta, namiesto hádania polí. API kľúč drž v konfigurácii, nikdy nie v kóde, testoch ani logoch.
+
+Postav to takto:
+
+1. Vyhľadávacie pole volá `GET /v1/search` počas písania: od 2–3 znakov, s oneskorením asi 250–300 ms, a predchádzajúcu požiadavku zruší. Pri každom výsledku ukáž názov, IČO a úplnú adresu, lebo rôzne subjekty môžu mať rovnaký názov.
+2. Výsledok vyhľadávania je kandidát, nie fakt. Keď ho používateľ vyberie, zavolaj `GET /v1/lookup/{ico}` a formulár vyplň len z tejto odpovede.
+3. K uloženej firme si ulož IČO a `source.version` každej časti. Neskôr ju over podľa IČO namiesto nového vyhľadávania a raz denne skontroluj zmeny cez `POST /v1/lookup:batch`.
+
+Pravidlá:
+
+- `503`, časť v stave `unknown` alebo príznak `stale` znamenajú, že údaj nie je známy, nikdy „nenájdené“. Nechaj používateľa pokračovať s údajmi, ktoré potvrdí; doklad nikdy neblokuj.
+- Subjekt ber ako platiteľa DPH len vtedy, keď je `vat.payer` `true`. Subjekty podľa §7 a §7a majú IČ DPH, ale nie sú platiteľmi DPH. Pri údajoch o DPH ukáž dátum aktuálnosti.
+- Jedno IČ DPH môže patriť viacerým subjektom (skupina DPH): nechaj používateľa vybrať.
+- Identifikátory sú presné: IČO, DIČ ani IČ DPH nikdy neporovnávaj ani neopravuj približne.
+- Keď údaje z registra ukazuješ iným ľuďom, ukáž texty `attribution` z odpovede.
+- Pri `429` počkaj podľa `Retry-After`; požiadavky `GET` po chybe spojenia opakuj s narastajúcim odstupom.
+
+Tieto pravidlá pokry testami, ktoré používajú len fiktívne firmy.
+</Prompt>
+
 Postup, ktorý funguje pre aplikáciu, akou je napríklad fakturačný nástroj:
 
 <Steps>
   <Step title="Vyhľadávanie navrhuje">
-    Výsledky `/v1/search` ukazujte počas písania, s oneskorením. Zobrazte názov, IČO a obec: dva subjekty môžu mať
+    Výsledky `/v1/search` ukazujte počas písania, s oneskorením. Zobrazte názov, IČO a úplnú adresu: dva subjekty môžu mať
     rovnaký názov.
   </Step>
   <Step title="Rozhoduje len presný identifikátor">

@@ -88,8 +88,15 @@ components:
           type: boolean
         apiVersion:
           type: string
+        demo:
+          description: "true on a demo database: every answer holds fictional subjects, not register data"
+          type: boolean
         fuzzy:
           $ref: "#/components/schemas/CapabilitiesBodyFuzzyStruct"
+        maxInFlight:
+          description: Data requests this instance runs at once; beyond that, after a short wait, 503 with reason overloaded
+          format: int64
+          type: integer
         mcp:
           $ref: "#/components/schemas/CapabilitiesBodyMCPStruct"
           description: The read-only MCP adapter for AI agents
@@ -112,6 +119,8 @@ components:
         - fuzzy
         - rate
         - mcp
+        - maxInFlight
+        - demo
       type: object
     CapabilitiesBodyFuzzyStruct:
       additionalProperties: false
@@ -320,7 +329,7 @@ components:
             - array
             - "null"
         reason:
-          description: "For unavailable: bootstrapping, setup, source_stale, timeout, database"
+          description: "For unavailable: bootstrapping, setup, source_stale, timeout, database, overloaded"
           type: string
         status:
           description: HTTP status code
@@ -497,6 +506,9 @@ components:
         bootstrapping:
           description: true until every source is first published
           type: boolean
+        demo:
+          description: "true on a demo database: fictional subjects, not register data (accquix-register demo)"
+          type: boolean
         licences:
           additionalProperties:
             type: string
@@ -514,6 +526,7 @@ components:
         - sources
         - bootstrapping
         - setupPending
+        - demo
         - licences
         - attribution
       type: object

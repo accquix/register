@@ -11,13 +11,55 @@ Financial Administration lists.
 | PostgreSQL | 16, 17 or 18, with the `pg_trgm` extension | 18 |
 | Database disk | 5 GB (about 2.3 GB of data, about 0.75 GB WAL during loads, headroom) | 10 GB |
 | Database RAM | 1 GB | 2–4 GB |
-| Database CPU | 1/8 vCPU (about 30 default searches a second when saturated) | 1/4 vCPU or more (75–140 a second) |
+| Database CPU | 1/8 vCPU: about 85 default searches a second at the limit; plan for up to about 30 | 1/4 vCPU or more: about 100–110 a second at the limit; plan for up to about 50 |
 | Register container | 256 MB RAM; the sync peaks at about 30 MB | 512 MB |
 | Work volume for `sync` | 1 GB during the first run; files are deleted once applied | — |
 | Outbound HTTPS | The RPO bucket (Oracle Cloud, Frankfurt) and `report.financnasprava.sk` | — |
 
+<Callout type="warning">
+**Below the minimum is for trying only.** A smaller database, such as 1/16 vCPU and 512 MB, starts and answers, but
+its CPU and memory were at 100 % already at 10 searches a second, with no room for a burst or the monthly reconcile.
+For production, use at least **1/8 vCPU and 1 GB** (for example [PlanetScale PS-10](/self-hosting/planetscale#sizes)).
+</Callout>
+
+<Panel title="How the CPU figures were measured">
+On PlanetScale Postgres with the real data, the API about 20 ms from the database and a connection pool of 20. The
+limit is where answers stopped keeping up; plan for about half of it. With a small pool the pool, not the CPU, sets
+the limit. Details and the method: [PlanetScale Postgres](/self-hosting/planetscale).
+</Panel>
+
 **Any PostgreSQL works:** plain PostgreSQL, Neon, PlanetScale Postgres, Supabase, RDS. Only `pg_trgm` is needed; no
 provider-specific extension.
+
+## Where to run it
+
+<CardGroup cols={2}>
+  <Card title="Docker compose" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>' href="/self-hosting/docker-compose">
+    The whole stack on one machine: PostgreSQL, migrations, the API and the sync.
+  </Card>
+  <Card title="Coolify and Dokploy" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M4.364 4.364V0h17.454v4.364zm0 13.09H0V4.365h4.364zm0 0h17.454v4.364H4.364ZM6.545 6.546v-1.7H22.3V2.182H24v4.363zm0 0v10.4h-1.7v-10.4ZM3.882 17.936v1.7h-1.7v-1.7ZM24 24H6.545v-1.7H22.3v-2.664H24Z"/></svg>' href="/self-hosting/paas">
+    A compose variant for self-hosted PaaS platforms on your own server.
+  </Card>
+  <Card title="AWS" icon="cloud" href="/self-hosting/aws">
+    ECS Fargate with RDS for PostgreSQL, and the pitfalls specific to AWS.
+  </Card>
+  <Card title="Other platforms" icon="boxes" href="/self-hosting/platforms">
+    Any platform with a long-lived container and a scheduled job.
+  </Card>
+</CardGroup>
+
+## The database
+
+The register needs one PostgreSQL database, on your server or from a provider.
+
+<CardGroup cols={2}>
+  <Card title="Any PostgreSQL" icon="database" href="/self-hosting/database">
+    Plain PostgreSQL, Neon, Supabase or RDS: roles, connections, the API pool and the objections backup.
+  </Card>
+  <Card title="PlanetScale Postgres" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M0 12C0 5.373 5.373 0 12 0c4.873 0 9.067 2.904 10.947 7.077l-15.87 15.87a11.981 11.981 0 0 1-1.935-1.099L14.99 12H12l-8.485 8.485A11.962 11.962 0 0 1 0 12Zm12.004 12L24 12.004C23.998 18.628 18.628 23.998 12.004 24Z"/></svg>' href="/self-hosting/planetscale">
+    Tested with the real data: setup, measured sizes and online resizing.
+  </Card>
+</CardGroup>
 
 ## How long the first run takes
 

@@ -35,6 +35,7 @@ import (
 
 	"github.com/accquix/register/internal/api"
 	"github.com/accquix/register/internal/config"
+	"github.com/accquix/register/internal/demo"
 	"github.com/accquix/register/internal/ingest"
 	"github.com/accquix/register/internal/migrate"
 	"github.com/accquix/register/internal/normalize"
@@ -66,6 +67,8 @@ modes:
   mcp --url URL                   MCP over stdio for a local AI client, forwarding to the REST API of
                                   the instance at URL (key: REGISTER_MCP_KEY or REGISTER_MCP_KEY_FILE)
   mcp-tools                       print the MCP tool list (JSON)
+  demo                            migrate, then load fictional subjects into a new, empty database
+                                  and mark it as a demo for good (sync then refuses it)
   openapi                         print the OpenAPI 3.1 document (YAML)
   version                         print the version
 
@@ -114,6 +117,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env confi
 		err = runSuppress(ctx, cfg, rest, os.Stdin, stdout)
 	case "mcp":
 		err = runMCP(ctx, cfg, rest, os.Stdin, stdout, log)
+	case "demo":
+		err = runDemo(ctx, cfg, stdout, log)
 	case "mcp-tools":
 		var b []byte
 		if b, err = api.MCPToolsJSON(); err == nil {
@@ -218,6 +223,11 @@ func runSync(ctx context.Context, cfg config.Config, args []string, log *slog.Lo
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
+	if isDemo, err := demo.IsDemo(ctx, conn); err != nil {
+		return fmt.Errorf("check the database: %w", err)
+	} else if isDemo {
+		return demo.ErrDemoDatabase
+	}
 	if *unblock {
 		if err := syncer.Unblock(ctx, conn, src); err != nil {
 			return err
@@ -283,6 +293,7 @@ func apiConfig(cfg config.Config, keys api.Keys) api.Config {
 		RatePerSecond: cfg.RatePerSecond, RateBurst: cfg.RateBurst, FuzzyEvery: cfg.FuzzyEvery,
 		MCP: cfg.MCP, MCPAllowedOrigins: cfg.MCPAllowedOrigins,
 		FuzzyConcurrent: cfg.FuzzyConcurrent, FuzzyTimeout: cfg.FuzzyTimeout, QueryTimeout: cfg.QueryTimeout,
+		MaxInFlight: cfg.MaxInFlight, AdmitWait: cfg.AdmitWait,
 		Search: search.Config{WordStepMax: cfg.WordStepMax, WordCap: cfg.WordCap},
 	}
 }
@@ -298,17 +309,29 @@ func runServe(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if cfg.DatabaseURL == "" {
 		return errors.New("REGISTER_DATABASE_URL is required")
 	}
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pcfg, err := poolConfig(cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)
 	}
 	defer pool.Close()
-	handler, _ := api.New(pool, apiConfig(cfg, keys), log)
+	if err := checkSchema(ctx, pool, log); err != nil {
+		return err
+	}
+	acfg := apiConfig(cfg, keys)
+	if acfg.MaxInFlight <= 0 || acfg.MaxInFlight > int(pcfg.MaxConns) {
+		acfg.MaxInFlight = int(pcfg.MaxConns) // never admit more than the pool can serve at once
+	}
+	handler, _ := api.New(pool, acfg, log)
 	srv := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("serving", "listen", cfg.Listen, "keys", len(keys), "anonymous", cfg.AllowAnonymous, "fuzzy", cfg.SearchFuzzy, "mcp", cfg.MCP)
+	log.Info("serving", "listen", cfg.Listen, "keys", len(keys), "anonymous", cfg.AllowAnonymous, "fuzzy", cfg.SearchFuzzy, "mcp", cfg.MCP,
+		"pool_max_conns", pcfg.MaxConns, "max_in_flight", acfg.MaxInFlight)
 	select {
 	case err := <-errc:
 		return err
@@ -632,4 +655,73 @@ func readObjections(r io.Reader) ([]ingest.Objection, error) {
 		h.Write([]byte(line))
 		out = append(out, o)
 	}
+}
+
+// DefaultPoolMaxConns is the API's connection pool size when the URL sets none (D40). pgx would
+// use max(4, CPUs), and in a container that is the host's CPU count, not the container's share.
+const DefaultPoolMaxConns = 10
+
+// poolConfig parses the API's database URL; pool_max_conns in the URL wins over the default.
+func poolConfig(url string) (*pgxpool.Config, error) {
+	pc, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(url, "pool_max_conns") {
+		pc.MaxConns = DefaultPoolMaxConns
+	}
+	return pc, nil
+}
+
+// runDemo prepares a demo database (D41): the schema, then the fictional data set through the
+// normal sync code, then the confirmation of an installation without objections.
+func runDemo(ctx context.Context, cfg config.Config, stdout io.Writer, log *slog.Logger) error {
+	if cfg.MigrateDatabaseURL == "" || cfg.SyncDatabaseURL == "" {
+		return errors.New("REGISTER_DATABASE_URL is required")
+	}
+	if _, err := migrate.Up(ctx, cfg.MigrateDatabaseURL); err != nil {
+		return err
+	}
+	conn, err := pgx.Connect(ctx, cfg.SyncDatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	work, err := os.MkdirTemp("", "accquix-register-demo-") // a few kilobytes, removed afterwards
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(work) }()
+	sum, err := demo.Load(ctx, conn, work, log)
+	if err != nil {
+		return err
+	}
+	if sum.AlreadyLoaded {
+		fmt.Fprintf(stdout, "demo database already loaded: %d fictional subjects\n", sum.Subjects)
+	} else {
+		fmt.Fprintf(stdout, "demo database loaded: %d fictional subjects. They are not register data.\n", sum.Subjects)
+	}
+	return nil
+}
+
+// checkSchema refuses to serve a database whose schema is older than this binary: every query
+// would fail and the API would answer only "database unavailable". A newer schema (a rolling
+// upgrade) is allowed with a warning. A role that may not read the migration table is let through.
+func checkSchema(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
+	want, err := migrate.Latest()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	have, err := migrate.Applied(ctx, pool)
+	switch {
+	case err != nil:
+		log.Warn("could not read the schema version; is migrate done?", "error", err)
+	case have < want:
+		return fmt.Errorf("the database schema is at version %d and this binary needs %d: run `accquix-register migrate` first", have, want)
+	case have > want:
+		log.Warn("the database schema is newer than this binary", "schema", have, "binary", want)
+	}
+	return nil
 }

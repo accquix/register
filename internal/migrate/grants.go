@@ -55,6 +55,7 @@ func matrix(r Roles, maintain bool) []roleGrants {
 	return []roleGrants{
 		{r.API, []grant{
 			{"SELECT", join(mirror, search, []string{"sync_source", "objection_active", "register_setup"})},
+			{"SELECT", []string{"goose_db_version"}}, // serve checks at start that the schema is current
 		}},
 		{r.Sync, []grant{
 			{write, join(mirror, search, stage, state)},

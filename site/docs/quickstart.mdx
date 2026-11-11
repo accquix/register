@@ -4,7 +4,35 @@ description: Run Accquix Register with docker compose, wait for the first sync, 
 ---
 
 You need Docker with the compose plugin, about 10 GB of free disk and outbound HTTPS. The first sync downloads
-about 1 GB and takes 10–20 minutes, mostly downloading.
+about 1 GB and takes 7–20 minutes, mostly downloading.
+
+<Prompt description="Or let your AI agent **run** it locally and check that it works." actions={["copy"]}>
+Run Accquix Register locally with docker compose and check that it works. Do not change the compose files or the database.
+
+1. Check that Docker with the compose plugin is installed, that about 10 GB of disk is free, and that outbound HTTPS works.
+2. Run `git clone https://github.com/accquix/register`, then `./make-secrets.sh` in `register/deploy/compose`. It prints an API key once: tell me to store it, and never write it anywhere else or into logs.
+3. Run `docker compose up -d`. The first sync downloads about 1 GB and takes 7–20 minutes. Until it is done, the API answers `503` with the reason `bootstrapping`: that is expected, not an error.
+4. Check `curl -s localhost:8080/readyz` once a minute until it answers `ready`. If it is not ready after 40 minutes, show me `docker compose logs --tail 50 sync`.
+5. With the key, run one search, `GET /v1/search?q=<a company name>`, and one lookup of a result's IČO, `GET /v1/lookup/<IČO>`. Show me the answers with their `dataAsOf` and `attribution`.
+</Prompt>
+
+## Try the demo
+
+To see the API before you download anything, run the demo: the real API over about 180 fictional companies and sole
+traders, with VAT payers, a VAT group, closed subjects and risk-list entries. Once the image is built, it is ready in
+seconds.
+
+```sh
+git clone https://github.com/accquix/register && cd register
+docker compose -f deploy/demo/compose.yaml up -d --wait serve
+curl -s 'localhost:8080/v1/search?q=zlata'
+```
+
+No API key is needed: the demo listens on localhost only. Every answer says `DEMO DATA` in its `attribution`, and
+`/v1/capabilities` reports `"demo": true`. The database lives in memory and is gone after
+`docker compose -f deploy/demo/compose.yaml down`. The sync refuses a demo database, so demo and real data never mix.
+
+## Run it with the real data
 
 <Steps>
   <Step title="Get the code">

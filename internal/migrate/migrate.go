@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
@@ -79,4 +80,36 @@ func Statuses(ctx context.Context, dsn string) ([]Status, error) {
 		out = append(out, Status{Version: s.Source.Version, Source: s.Source.Path, Applied: s.State == goose.StateApplied})
 	}
 	return out, nil
+}
+
+// Latest is the newest migration version embedded in this binary.
+func Latest() (int64, error) {
+	sub, err := fs.Sub(db.Migrations, "migrations")
+	if err != nil {
+		return 0, err
+	}
+	entries, err := fs.ReadDir(sub, ".")
+	if err != nil {
+		return 0, err
+	}
+	var latest int64
+	for _, e := range entries {
+		var v int64
+		if _, err := fmt.Sscanf(e.Name(), "%d_", &v); err == nil && v > latest {
+			latest = v
+		}
+	}
+	return latest, nil
+}
+
+// RowQuerier is what Applied needs: a connection or a pool.
+type RowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// Applied is the newest migration version applied to the database.
+func Applied(ctx context.Context, q RowQuerier) (int64, error) {
+	var v int64
+	err := q.QueryRow(ctx, `SELECT coalesce(max(version_id), 0) FROM goose_db_version WHERE is_applied`).Scan(&v)
+	return v, err
 }

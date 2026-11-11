@@ -21,11 +21,11 @@ mode: custom
     <Stat value="1–5 ms" label="bežné vyhľadávanie na skutočných dátach" />
     <Stat value="≈1 milión" label="aktívnych firiem a živnostníkov" />
     <Stat value="7 zdrojov" label="RPO a šesť zoznamov Finančnej správy" />
-    <Stat value="24 MB" label="jeden binárny súbor v Go v obraze" />
+    <Stat value="≈100/s" label="vyhľadávaní na spravovanej databáze s 1/4 vCPU" />
   </Stats>
 </Section>
 
-<Section title="Spustenie tromi príkazmi" lead="Docker s compose, asi 10 GB miesta na disku a odchádzajúce HTTPS. Prvá synchronizácia trvá 10–20 minút, väčšinou sťahovanie.">
+<Section title="Spustenie tromi príkazmi" lead="Docker s compose, asi 10 GB miesta na disku a odchádzajúce HTTPS. Prvá synchronizácia trvá 7–20 minút, väčšinou sťahovanie.">
 
 ```sh
 git clone https://github.com/accquix/register && cd register/deploy/compose
@@ -33,6 +33,50 @@ git clone https://github.com/accquix/register && cd register/deploy/compose
 docker compose up -d     # PostgreSQL, migrate, API na :8080, synchronizácia každú hodinu
 ```
 
+Len sa chcete pozrieť? `docker compose -f deploy/demo/compose.yaml up` spustí rovnaké API nad fiktívnymi dátami za
+pár sekúnd a nič nesťahuje: pozrite [Vyskúšajte demo](/sk/quickstart#vyskúšajte-demo). Alebo to nechajte na svojho AI agenta: prompt nájdete na stránke [Rýchly štart](/sk/quickstart). Na integráciu API
+do vašej aplikácie je prompt na stránke [Integrácia do aplikácie](/sk/api/integration).
+
+</Section>
+
+<Section title="Spustite ho tam, kde už ste" lead="Jeden kontajner pre API, jedna plánovaná úloha pre synchronizáciu a akýkoľvek PostgreSQL 16–18.">
+  <CardGroup cols={2}>
+    <Card title="Docker compose" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>' href="/sk/self-hosting/docker-compose">
+      Celé riešenie na jednom stroji.
+    </Card>
+    <Card title="Coolify a Dokploy" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M4.364 4.364V0h17.454v4.364zm0 13.09H0V4.365h4.364zm0 0h17.454v4.364H4.364ZM6.545 6.546v-1.7H22.3V2.182H24v4.363zm0 0v10.4h-1.7v-10.4ZM3.882 17.936v1.7h-1.7v-1.7ZM24 24H6.545v-1.7H22.3v-2.664H24Z"/></svg>' href="/sk/self-hosting/paas">
+      Variant compose pre vlastnú PaaS.
+    </Card>
+    <Card title="AWS" icon="cloud" href="/sk/self-hosting/aws">
+      ECS Fargate s RDS for PostgreSQL.
+    </Card>
+    <Card title="PlanetScale Postgres" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M0 12C0 5.373 5.373 0 12 0c4.873 0 9.067 2.904 10.947 7.077l-15.87 15.87a11.981 11.981 0 0 1-1.935-1.099L14.99 12H12l-8.485 8.485A11.962 11.962 0 0 1 0 12Zm12.004 12L24 12.004C23.998 18.628 18.628 23.998 12.004 24Z"/></svg>' href="/sk/self-hosting/planetscale">
+      Otestované na reálnych dátach, s nameranými veľkosťami.
+    </Card>
+  </CardGroup>
+</Section>
+
+<Section title="Koľko stojí prevádzka" lead="Žiadny licenčný poplatok ani cena za požiadavku: platíte len za infraštruktúru a tá je malá.">
+  <Stats>
+    <Stat value="0 €" label="navyše na serveri, ktorý už máte: asi 1 GB RAM a 10 GB disku" />
+    <Stat value="≈14 $/mes." label="spravovaná databáza s rezervou (PlanetScale PS-10, Frankfurt)" />
+    <Stat value="≈41 $/mes." label="to isté s vysokou dostupnosťou, keď na tom stojí platba" />
+    <Stat value="≈30/s" label="vyhľadávaní, ktoré PS-10 zvládne s rezervou; asi 85 na limite" />
+  </Stats>
+
+Ceny poskytovateľov z novembra 2026, bez dane a bez kontajnera, v ktorom beží API. Namerané veľkosti sú na stránke
+[PlanetScale Postgres](/sk/self-hosting/planetscale#veľkosti); aktuálne ceny si overte u poskytovateľov.
+</Section>
+
+<Section title="Pre aplikácie aj AI agentov" lead="Váš kód volá REST API; agenti, ktorých nestavate, napríklad Claude alebo Cursor, môžu použiť MCP.">
+  <CardGroup cols={2}>
+    <Card title="REST API" icon="code" href="/sk/reference">
+      Verziovaný kontrakt OpenAPI 3.1: klienta vygenerujete v akomkoľvek jazyku.
+    </Card>
+    <Card title="AI agenti (MCP)" icon="bot" href="/sk/api/mcp">
+      MCP endpoint len na čítanie s rovnakými kľúčmi, limitmi a pravidlami logovania.
+    </Card>
+  </CardGroup>
 </Section>
 
 <Section title="Kam ďalej">
@@ -47,7 +91,7 @@ docker compose up -d     # PostgreSQL, migrate, API na :8080, synchronizácia ka
       Vyhľadávanie, overenie, sledovanie zmien, chyby a limity s príkladmi.
     </Card>
     <Card title="Vlastná prevádzka" icon="server" href="/sk/self-hosting/requirements">
-      Compose, Kubernetes, AWS a spravované PostgreSQL, roly a prevádzka.
+      Docker compose, Coolify, AWS, PlanetScale alebo akýkoľvek PostgreSQL; roly a prevádzka.
     </Card>
   </CardGroup>
 </Section>
@@ -69,7 +113,7 @@ nezávisí od cudzích limitov.
   - zoznamy Finančnej správy: DIČ, IČ DPH a paragraf registrácie, index spoľahlivosti a rizikové zoznamy.
 - **Denné aktualizácie**, ktoré možno kedykoľvek prerušiť a ktoré bezpečne pokračujú.
 - **Jedno vyhľadávacie pole** pre názov, IČO, DIČ aj IČ DPH. Ignoruje diakritiku a poradie slov, nájde začiatok
-  ktoréhokoľvek slova a voliteľne opraví preklepy.
+  ktoréhokoľvek slova, pri každom kandidátovi ukáže úplnú adresu a voliteľne opraví preklepy.
 - **Overenie**, ktoré pri každej časti odpovede uvádza zdroj, dátum aktuálnosti a verziu na sledovanie zmien a
   úprimne povie, keď niečo nevie: každá časť je <State is="present" />, <State is="absent" /> alebo
   <State is="unknown" />.

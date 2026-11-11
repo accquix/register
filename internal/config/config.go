@@ -78,6 +78,8 @@ type Config struct {
 	FuzzyConcurrent int           // REGISTER_FUZZY_CONCURRENCY, 1 (per instance)
 	FuzzyTimeout    time.Duration // REGISTER_FUZZY_TIMEOUT, 2s
 	QueryTimeout    time.Duration // REGISTER_QUERY_TIMEOUT, 3s: default search and lookup
+	MaxInFlight     int           // REGISTER_MAX_IN_FLIGHT, 0 = the connection pool size (D39)
+	AdmitWait       time.Duration // REGISTER_ADMIT_WAIT, 250ms: wait for a free slot before 503 overloaded
 	WordStepMax     int           // REGISTER_SEARCH_WORD_STEP_MAX, 1000
 	WordCap         int           // REGISTER_SEARCH_WORD_CAP, 1000
 }
@@ -315,6 +317,11 @@ func (c *Config) loadServe(e Env) error {
 	if c.MCPKey, err = e.Secret("REGISTER_MCP_KEY"); err != nil {
 		return err
 	}
+	if v := e.Getenv("REGISTER_MAX_IN_FLIGHT"); v != "" {
+		if c.MaxInFlight, err = positiveInt(v, 0); err != nil {
+			return fmt.Errorf("REGISTER_MAX_IN_FLIGHT: %w", err)
+		}
+	}
 	if v := e.Getenv("REGISTER_RATE_PER_SECOND"); v == "" {
 		c.RatePerSecond = 20
 	} else if c.RatePerSecond, err = strconv.ParseFloat(v, 64); err != nil || c.RatePerSecond <= 0 {
@@ -342,6 +349,7 @@ func (c *Config) loadServe(e Env) error {
 		{"REGISTER_FUZZY_EVERY", &c.FuzzyEvery, 5 * time.Second},
 		{"REGISTER_FUZZY_TIMEOUT", &c.FuzzyTimeout, 2 * time.Second},
 		{"REGISTER_QUERY_TIMEOUT", &c.QueryTimeout, 3 * time.Second},
+		{"REGISTER_ADMIT_WAIT", &c.AdmitWait, 250 * time.Millisecond},
 	} {
 		if *v.dst, err = durationVar(e, v.name, v.def); err != nil {
 			return err

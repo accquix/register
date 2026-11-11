@@ -23,6 +23,7 @@ This page lists what is implemented so far. It grows with each stage.
 | `accquix-register serve` | The read-only HTTP API (see below) |
 | `accquix-register mcp --url URL` | The MCP tools over stdio for a local AI client, forwarding every call to the REST API of the instance at URL with the key from `REGISTER_MCP_KEY` (or `_FILE`). It never connects to the database (D36) |
 | `accquix-register mcp-tools` | Prints the MCP tool list; the committed copy is `api/mcp-tools.json` |
+| `accquix-register demo` | Migrates, then loads about 180 fictional subjects into a new, empty database through the normal sync code and marks it as a demo for good (D41): every attribution says so, `/v1/capabilities` reports `demo: true`, and `sync` refuses the database. It refuses a database that holds real data. `deploy/demo/compose.yaml` runs it |
 | `accquix-register openapi` | Prints the OpenAPI 3.1 document; the committed copy is `api/openapi.yaml` |
 | `accquix-register version` | Prints the version |
 
@@ -33,7 +34,7 @@ source), `2` a command-line mistake.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `REGISTER_DATABASE_URL` (secret) | — | PostgreSQL connection string |
+| `REGISTER_DATABASE_URL` (secret) | — | PostgreSQL connection string. pgx parameters work in it, for example `pool_max_conns=12` for the API pool (default 10, D40) |
 | `REGISTER_MIGRATE_DATABASE_URL` (secret) | `REGISTER_DATABASE_URL` | Used by `migrate`, for example with a DDL role |
 | `REGISTER_SYNC_DATABASE_URL` (secret) | `REGISTER_DATABASE_URL` | Used by `sync`. **A direct connection**, not a transaction pooler: the sync holds an advisory lock and uses COPY |
 | `REGISTER_OPERATOR_DATABASE_URL` (secret) | `REGISTER_SYNC_DATABASE_URL` | Used by `suppress`: the role that may change objections. A direct connection |
@@ -73,6 +74,8 @@ the list as a warning on every pass, so a loosened check is never in effect unno
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches running at once, **per instance**: with several replicas, set a conservative value per replica (D18) |
 | `REGISTER_FUZZY_TIMEOUT` | `2s` | A slower fuzzy search answers `503 timeout` |
 | `REGISTER_QUERY_TIMEOUT` | `3s` | The same for default search and lookup |
+| `REGISTER_MAX_IN_FLIGHT` | the pool size | Data requests run at once, per instance (D39). A request that finds no free slot waits `REGISTER_ADMIT_WAIT`, then gets `503` with `reason: overloaded` and `Retry-After`. Never more than the pool size |
+| `REGISTER_ADMIT_WAIT` | `250ms` | The wait for a free slot |
 | `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | The adaptive word step (D17) |
 
 Endpoints: `GET /v1/search`, `GET /v1/lookup/{id}`, `POST /v1/lookup:batch`, `GET /v1/sources`,

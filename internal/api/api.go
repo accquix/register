@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/accquix/register/internal/demo"
 	"github.com/accquix/register/internal/lookup"
 	"github.com/accquix/register/internal/normalize"
 	"github.com/accquix/register/internal/search"
@@ -45,6 +46,12 @@ type Config struct {
 	// MCPAllowedOrigins are browser origins allowed to call /mcp; empty refuses every
 	// cross-origin browser request (REGISTER_MCP_ALLOWED_ORIGINS).
 	MCPAllowedOrigins []string
+	// MaxInFlight is how many data requests run at once (REGISTER_MAX_IN_FLIGHT, D39). 0 means
+	// the size of the connection pool (10 when the pool is unknown).
+	MaxInFlight int
+	// AdmitWait is how long a request waits for a free slot before 503 overloaded
+	// (REGISTER_ADMIT_WAIT, 250 ms).
+	AdmitWait time.Duration
 }
 
 // Server holds the dependencies of the handlers.
@@ -57,6 +64,7 @@ type Server struct {
 	limiter  *limiter
 	fuzzyLim *limiter
 	fuzzySem chan struct{}
+	slots    chan struct{}
 	log      *slog.Logger
 }
 
@@ -74,6 +82,15 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 	if cfg.RatePerSecond <= 0 {
 		cfg.RatePerSecond, cfg.RateBurst = 20, 40
 	}
+	if cfg.MaxInFlight <= 0 {
+		cfg.MaxInFlight = 10
+		if pool != nil {
+			cfg.MaxInFlight = int(pool.Config().MaxConns)
+		}
+	}
+	if cfg.AdmitWait <= 0 {
+		cfg.AdmitWait = DefaultAdmitWait
+	}
 	s := &Server{
 		cfg: cfg, pool: pool, keys: cfg.Keys, log: log,
 		store:    &lookup.Store{Pool: pool, Now: time.Now},
@@ -81,9 +98,10 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 		limiter:  newLimiter(cfg.RatePerSecond, cfg.RateBurst),
 		fuzzyLim: newLimiter(1/cfg.FuzzyEvery.Seconds(), 2),
 		fuzzySem: make(chan struct{}, cfg.FuzzyConcurrent),
+		slots:    make(chan struct{}, cfg.MaxInFlight),
 	}
 	router := chi.NewMux()
-	router.Use(s.accessLog, s.authenticate)
+	router.Use(s.accessLog, s.authenticate, s.admission)
 	hc := huma.DefaultConfig("Accquix Register API", APIVersion)
 	hc.Info.Description = "Search and lookup of Slovak business register data (RPO and the Financial Administration lists). " +
 		"Search proposes; only an exact identifier resolves. Data: RPO © Ministerstvo vnútra SR, CC BY 4.0; Zdroj údajov: Finančná správa SR."
@@ -182,6 +200,7 @@ type SourcesBody struct {
 	Sources       []lookup.SourceInfo `json:"sources"`
 	Bootstrapping bool                `json:"bootstrapping" doc:"true until every source is first published"`
 	SetupPending  bool                `json:"setupPending" doc:"true until the operator confirms the objections of this installation; the data endpoints answer 503 reason=setup"`
+	Demo          bool                `json:"demo" doc:"true on a demo database: fictional subjects, not register data (accquix-register demo)"`
 	Licences      map[string]string   `json:"licences"`
 	Attribution   []string            `json:"attribution"`
 }
@@ -212,6 +231,8 @@ type CapabilitiesBody struct {
 		Enabled bool   `json:"enabled"`
 		Path    string `json:"path,omitempty"`
 	} `json:"mcp" doc:"The read-only MCP adapter for AI agents"`
+	MaxInFlight int  `json:"maxInFlight" doc:"Data requests this instance runs at once; beyond that, after a short wait, 503 with reason overloaded"`
+	Demo        bool `json:"demo" doc:"true on a demo database: every answer holds fictional subjects, not register data"`
 }
 
 type CapabilitiesOutput struct{ Body CapabilitiesBody }
@@ -236,20 +257,35 @@ func (s *Server) register(api huma.API) {
 		Errors: []int{401}}, s.capabilities)
 }
 
-func (s *Server) sourcesReady(ctx context.Context) (map[string]lookup.SourceInfo, error) {
+// ready is what a data endpoint needs to answer: the sources, and the attribution to show.
+type ready struct {
+	srcs        map[string]lookup.SourceInfo
+	attribution []string
+}
+
+func (s *Server) sourcesReady(ctx context.Context) (ready, error) {
 	srcs, err := s.store.Sources(ctx)
 	if err != nil {
-		return nil, unavailable("database", "the database is unavailable")
+		return ready{}, unavailable("database", "the database is unavailable")
 	}
 	if missing := lookup.Bootstrapping(srcs); len(missing) > 0 {
-		return nil, unavailable("bootstrapping", "the mirror is still being built")
+		return ready{}, unavailable("bootstrapping", "the mirror is still being built")
 	}
-	if ok, err := s.store.ObjectionsConfirmed(ctx); err != nil {
-		return nil, unavailable("database", "the database is unavailable")
+	ok, isDemo, err := s.store.Setup(ctx)
+	if err != nil {
+		return ready{}, unavailable("database", "the database is unavailable")
 	} else if !ok {
-		return nil, unavailable("setup", setupDetail)
+		return ready{}, unavailable("setup", setupDetail)
 	}
-	return srcs, nil
+	return ready{srcs: srcs, attribution: attribution(isDemo)}, nil
+}
+
+// attribution is the sources' attribution, or the demo notice on a demo database (D41).
+func attribution(isDemo bool) []string {
+	if isDemo {
+		return demo.Attribution
+	}
+	return lookup.Attribution
 }
 
 const setupDetail = "the operator has not confirmed the objections of this installation (suppress --restore or suppress --init-empty)"
@@ -266,11 +302,11 @@ func dbError(err error) error {
 }
 
 func (s *Server) search(ctx context.Context, in *SearchInput) (*SearchOutput, error) {
-	srcs, err := s.sourcesReady(ctx)
+	rd, err := s.sourcesReady(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := &SearchOutput{Body: SearchBody{Mode: in.Mode, Results: []Card{}, DataAsOf: srcs["rpo"].PublishedAsOf, Attribution: lookup.Attribution}}
+	out := &SearchOutput{Body: SearchBody{Mode: in.Mode, Results: []Card{}, DataAsOf: rd.srcs["rpo"].PublishedAsOf, Attribution: rd.attribution}}
 	if kind, id := normalize.Classify(in.Q); kind != normalize.KindText {
 		ctx, cancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
 		defer cancel()
@@ -454,9 +490,10 @@ ORDER BY terminated_on IS NULL DESC, (coalesce(register_code, '') IN ('1', '2'))
 }
 
 // lookupOne resolves one identifier. It returns a Problem for 4xx/5xx outcomes.
-func (s *Server) lookupOne(ctx context.Context, srcs map[string]lookup.SourceInfo, raw string) (*LookupBody, error) {
+func (s *Server) lookupOne(ctx context.Context, rd ready, raw string) (*LookupBody, error) {
+	srcs := rd.srcs
 	kind, id := normalize.Classify(raw)
-	body := &LookupBody{Type: kind.String(), Subjects: []lookup.Subject{}, Attribution: lookup.Attribution}
+	body := &LookupBody{Type: kind.String(), Subjects: []lookup.Subject{}, Attribution: rd.attribution}
 	switch kind {
 	case normalize.KindICO:
 		sub, found, err := s.store.Subject(ctx, srcs, id)
@@ -507,13 +544,13 @@ func (s *Server) notFound(srcs map[string]lookup.SourceInfo, consulted ...string
 }
 
 func (s *Server) lookup(ctx context.Context, in *LookupInput) (*LookupOutput, error) {
-	srcs, err := s.sourcesReady(ctx)
+	rd, err := s.sourcesReady(ctx)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
 	defer cancel()
-	body, err := s.lookupOne(ctx, srcs, in.ID)
+	body, err := s.lookupOne(ctx, rd, in.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -530,16 +567,16 @@ func versions(sub lookup.Subject) map[string]SectionVersion {
 }
 
 func (s *Server) batch(ctx context.Context, in *BatchInput) (*BatchOutput, error) {
-	srcs, err := s.sourcesReady(ctx)
+	rd, err := s.sourcesReady(ctx)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*s.cfg.QueryTimeout)
 	defer cancel()
-	out := &BatchOutput{Body: BatchBody{Items: make([]BatchItem, 0, len(in.Body.IDs)), Attribution: lookup.Attribution}}
+	out := &BatchOutput{Body: BatchBody{Items: make([]BatchItem, 0, len(in.Body.IDs)), Attribution: rd.attribution}}
 	for _, id := range in.Body.IDs {
 		item := BatchItem{ID: id, Status: http.StatusOK}
-		body, err := s.lookupOne(ctx, srcs, id)
+		body, err := s.lookupOne(ctx, rd, id)
 		var p *Problem
 		switch {
 		case errors.As(err, &p):
@@ -563,12 +600,15 @@ func (s *Server) sources(ctx context.Context, _ *struct{}) (*SourcesOutput, erro
 	if err != nil {
 		return nil, unavailable("database", "the database is unavailable")
 	}
-	confirmed, err := s.store.ObjectionsConfirmed(ctx)
+	confirmed, isDemo, err := s.store.Setup(ctx)
 	if err != nil {
 		return nil, unavailable("database", "the database is unavailable")
 	}
-	body := SourcesBody{Bootstrapping: len(lookup.Bootstrapping(srcs)) > 0, SetupPending: !confirmed, Attribution: lookup.Attribution,
+	body := SourcesBody{Bootstrapping: len(lookup.Bootstrapping(srcs)) > 0, SetupPending: !confirmed, Demo: isDemo, Attribution: attribution(isDemo),
 		Licences: map[string]string{"rpo": "CC BY 4.0 (Ministerstvo vnútra SR)", "fs": "Zdroj údajov: Finančná správa SR"}}
+	if isDemo {
+		body.Licences = map[string]string{"demo": "fictional data generated by Accquix Register; no licence of a register applies"}
+	}
 	for _, name := range lookup.AllSources {
 		body.Sources = append(body.Sources, srcs[name])
 	}
@@ -576,8 +616,13 @@ func (s *Server) sources(ctx context.Context, _ *struct{}) (*SourcesOutput, erro
 	return &SourcesOutput{Body: body}, nil
 }
 
-func (s *Server) capabilities(_ context.Context, _ *struct{}) (*CapabilitiesOutput, error) {
+func (s *Server) capabilities(ctx context.Context, _ *struct{}) (*CapabilitiesOutput, error) {
 	var b CapabilitiesBody
+	if s.pool != nil {
+		if _, isDemo, err := s.store.Setup(ctx); err == nil {
+			b.Demo = isDemo
+		}
+	}
 	b.APIVersion, b.Version, b.Anonymous, b.TaxpayerLookup = APIVersion, s.cfg.Version, s.cfg.AllowAnonymous, !s.cfg.AllowAnonymous
 	b.Search.Modes, b.Search.LimitMax = []string{"default"}, 20
 	b.Fuzzy.Enabled = s.cfg.Fuzzy
@@ -587,6 +632,7 @@ func (s *Server) capabilities(_ context.Context, _ *struct{}) (*CapabilitiesOutp
 		b.Fuzzy.PerKeyEvery, b.Fuzzy.Concurrency, b.Fuzzy.Timeout = s.cfg.FuzzyEvery.String(), s.cfg.FuzzyConcurrent, s.cfg.FuzzyTimeout.String()
 	}
 	b.Rate.PerSecond, b.Rate.Burst = s.cfg.RatePerSecond, s.cfg.RateBurst
+	b.MaxInFlight = s.cfg.MaxInFlight
 	if s.cfg.MCP {
 		b.MCP.Enabled, b.MCP.Path = true, MCPPath
 	}
@@ -605,11 +651,16 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, unavailable("bootstrapping", fmt.Sprintf("not yet published: %v", missing)), 0)
 		return
 	}
-	if ok, err := s.store.ObjectionsConfirmed(ctx); err != nil {
+	ok, isDemo, err := s.store.Setup(ctx)
+	if err != nil {
 		writeProblem(w, unavailable("database", "the database is unavailable"), 0)
 		return
 	} else if !ok {
 		writeProblem(w, unavailable("setup", setupDetail), 0)
+		return
+	}
+	if isDemo {
+		_, _ = w.Write([]byte("ready (demo data: fictional subjects)\n"))
 		return
 	}
 	_, _ = w.Write([]byte("ready\n"))

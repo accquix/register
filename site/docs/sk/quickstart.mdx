@@ -4,7 +4,36 @@ description: Spustite Accquix Register cez docker compose, počkajte na prvú sy
 ---
 
 Potrebujete Docker s doplnkom compose, približne 10 GB voľného miesta a odchádzajúce HTTPS spojenie. Prvá
-synchronizácia stiahne asi 1 GB a trvá 10–20 minút, väčšinu času zaberie sťahovanie.
+synchronizácia stiahne asi 1 GB a trvá 7–20 minút, väčšinu času zaberie sťahovanie.
+
+<Prompt description="Alebo nechajte svojho AI agenta register **spustiť** lokálne a overiť, že funguje." actions={["copy"]}>
+Spusti Accquix Register lokálne cez docker compose a over, že funguje. Súbory compose ani databázu nemeň.
+
+1. Over, že je nainštalovaný Docker s doplnkom compose, že je voľných asi 10 GB na disku a že funguje odchádzajúce HTTPS.
+2. Spusti `git clone https://github.com/accquix/register` a potom `./make-secrets.sh` v `register/deploy/compose`. Vypíše API kľúč len raz: povedz mi, aby som si ho uložil, a nikde inde ani do logov ho nezapisuj.
+3. Spusti `docker compose up -d`. Prvá synchronizácia stiahne asi 1 GB a trvá 7–20 minút. Kým neskončí, API odpovedá `503` s dôvodom `bootstrapping`: to je očakávané, nie chyba.
+4. Raz za minútu skontroluj `curl -s localhost:8080/readyz`, kým neodpovie `ready`. Ak nie je pripravený ani po 40 minútach, ukáž mi `docker compose logs --tail 50 sync`.
+5. S kľúčom spusti jedno vyhľadávanie, `GET /v1/search?q=<názov firmy>`, a jedno overenie IČO z výsledku, `GET /v1/lookup/<IČO>`. Ukáž mi odpovede s ich `dataAsOf` a `attribution`.
+</Prompt>
+
+## Vyskúšajte demo
+
+Ak chcete API vidieť skôr, než čokoľvek stiahnete, spustite demo: skutočné API nad asi 180 fiktívnymi firmami a
+živnostníkmi, s platiteľmi DPH, skupinou DPH, zaniknutými subjektmi aj záznamami v rizikových zoznamoch. Keď je obraz
+zostavený, je pripravené za pár sekúnd.
+
+```sh
+git clone https://github.com/accquix/register && cd register
+docker compose -f deploy/demo/compose.yaml up -d --wait serve
+curl -s 'localhost:8080/v1/search?q=zlata'
+```
+
+API kľúč netreba: demo počúva len na localhoste. Každá odpoveď má v `attribution` text `DEMO DATA` a
+`/v1/capabilities` uvádza `"demo": true`. Databáza je len v pamäti a po
+`docker compose -f deploy/demo/compose.yaml down` zmizne. Synchronizácia demo databázu odmietne, takže demo a reálne
+dáta sa nikdy nezmiešajú.
+
+## Spustenie s reálnymi dátami
 
 <Steps>
   <Step title="Stiahnite kód">

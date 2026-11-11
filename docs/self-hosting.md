@@ -26,7 +26,7 @@ publishes them. When you run an instance, **you** are the controller of that cop
 | --- | --- | --- |
 | PostgreSQL disk | 5 GB (about 2.3 GB of data, about 0.75 GB WAL during loads, headroom) | 10 GB |
 | PostgreSQL RAM | 1 GB | 2–4 GB |
-| PostgreSQL CPU | 1/8 vCPU: about 30 default searches/s when saturated | 1/4 vCPU or more: 75–140/s. Fuzzy search is the CPU-heavy part |
+| PostgreSQL CPU | 1/8 vCPU: about 85 default searches/s at the limit, 60/s sustained at full CPU; plan for up to about 30/s | 1/4 vCPU or more: about 100–110/s at the limit; plan for up to about 50/s ([managed-postgres-results.md](managed-postgres-results.md)) |
 | Register container | 256 MB RAM (the sync peaks at about 30 MB) | 512 MB |
 | Work volume for `sync` | 1 GB during the first run | — |
 | Outbound HTTPS | the RPO bucket (Oracle Cloud, Frankfurt) and `report.financnasprava.sk` | — |
@@ -120,8 +120,17 @@ role, so that it can `ANALYZE` the search tables after a rebuild; on 16 autovacu
 temporary tables); the API can go through a transaction pooler (PgBouncer). Use
 `sslmode=verify-full` to managed databases.
 
-**PlanetScale Postgres:** `pg_strict` is compatible (the register never runs `UPDATE`/`DELETE`
-without `WHERE`); use port 5432 for the sync and the operator, and 6432 (PgBouncer) for the API.
+**API connection pool:** `serve` opens at most 10 connections unless the URL sets `pool_max_conns`
+(D40), and runs at most that many data requests at once; the excess gets `503 overloaded` after a
+short wait (D39). When the database is not next to the API, the pool can set the limit: at 20 ms
+per round trip each connection carries about 7 searches a second. Set the size in the URL, for
+example `?sslmode=verify-full&pool_max_conns=12` in `REGISTER_DATABASE_URL`, within the database's
+connection limit.
+
+**PlanetScale Postgres:** tested on 2026-11-11 with the real data
+([managed-postgres-results.md](managed-postgres-results.md)). `pg_strict` with both settings `on`
+is compatible (the register never runs `UPDATE`/`DELETE` without `WHERE`); use port 5432 for the
+sync and the operator, and 6432 (PgBouncer) for the API. The small sizes allow 25 connections.
 
 ## Objections: your own data
 

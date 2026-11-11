@@ -1,4 +1,4 @@
-package testkit
+package synthetic
 
 import (
 	"archive/zip"
@@ -7,11 +7,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"sort"
 	"strings"
 	"sync"
-	"testing"
 )
 
 // Item is one synthetic list item: element name → value.
@@ -44,10 +42,10 @@ func FSZip(slug, date string, items []Item) []byte {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	w, _ := zw.Create(slug + ".xml")
-	w.Write([]byte(x.String()))
+	_, _ = w.Write([]byte(x.String()))
 	w, _ = zw.Create(slug + ".xsd")
-	w.Write([]byte("<xs:schema/>"))
-	zw.Close()
+	_, _ = w.Write([]byte("<xs:schema/>"))
+	_ = zw.Close()
 	return buf.Bytes()
 }
 
@@ -80,24 +78,17 @@ func TaxItem(n int, ico string) Item {
 	return it
 }
 
-// FSServer is a fake report.financnasprava.sk: GET /<slug>.zip with an ETag and 304 for a match.
+// FSServer imitates report.financnasprava.sk: GET /<slug>.zip with an ETag and 304 for a match.
 type FSServer struct {
-	mu     sync.Mutex
-	files  map[string][]byte
-	Server *httptest.Server
-	Gets   map[string]int // full (200) responses per slug
+	mu    sync.Mutex
+	files map[string][]byte
+	Gets  map[string]int // full (200) responses per slug
 }
 
-// NewFSServer starts the fake; it is closed when the test ends.
-func NewFSServer(t *testing.T) *FSServer {
-	s := &FSServer{files: map[string][]byte{}, Gets: map[string]int{}}
-	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
-	t.Cleanup(s.Server.Close)
-	return s
+// NewFSServer returns an empty list server; serve it with net/http (it is an http.Handler).
+func NewFSServer() *FSServer {
+	return &FSServer{files: map[string][]byte{}, Gets: map[string]int{}}
 }
-
-// URL is the base URL.
-func (s *FSServer) URL() string { return s.Server.URL }
 
 // Put publishes a list version.
 func (s *FSServer) Put(slug string, data []byte) {
@@ -111,7 +102,8 @@ func etagOf(b []byte) string {
 	return `"` + hex.EncodeToString(h[:8]) + `"`
 }
 
-func (s *FSServer) serve(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP answers GET /<slug>.zip with an ETag, and 304 for a match.
+func (s *FSServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	slug := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".zip")
@@ -129,5 +121,5 @@ func (s *FSServer) serve(w http.ResponseWriter, r *http.Request) {
 	s.Gets[slug]++
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Length", fmt.Sprint(len(data)))
-	w.Write(data)
+	_, _ = w.Write(data)
 }

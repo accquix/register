@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,11 @@ import (
 	"time"
 
 	"github.com/accquix/register/internal/config"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/accquix/register/internal/ingest"
+	"github.com/accquix/register/internal/migrate"
+	"github.com/accquix/register/internal/testkit"
 )
 
 func emptyEnv() config.Env {
@@ -158,5 +163,54 @@ func TestExportNeverDestroysABackup(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".objections-*")); len(left) != 0 {
 		t.Fatalf("temporary files left behind: %v", left)
+	}
+}
+
+// TestDemoCommand: demo migrates and loads an empty database; sync then refuses it, so real and
+// fictional data never mix (D41).
+func TestDemoCommand(t *testing.T) {
+	dsn := testkit.Database(t)
+	env := config.Env{Getenv: func(k string) string {
+		if k == "REGISTER_DATABASE_URL" {
+			return dsn
+		}
+		return ""
+	}, ReadFile: os.ReadFile}
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"demo"}, &out, &errb, env); code != 0 {
+		t.Fatalf("demo: exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "fictional subjects") {
+		t.Fatalf("demo output: %q", out.String())
+	}
+	errb.Reset()
+	if code := run(context.Background(), []string{"sync", "--source", "fs"}, &out, &errb, env); code != 1 || !strings.Contains(errb.String(), "demo data") {
+		t.Fatalf("sync on a demo database: exit %d: %s", code, errb.String())
+	}
+}
+
+// TestServeRefusesAnOldSchema: serve stops at start, with the fix in the message, instead of
+// answering every request with "database unavailable" (found on a real test database).
+func TestServeRefusesAnOldSchema(t *testing.T) {
+	ctx := context.Background()
+	dsn := testkit.Database(t)
+	latest, err := migrate.Latest()
+	if err != nil || latest < 4 {
+		t.Fatalf("latest migration %d: %v", latest, err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	log := slog.New(slog.DiscardHandler)
+	if err := checkSchema(ctx, pool, log); err != nil {
+		t.Fatalf("current schema refused: %v", err)
+	}
+	if _, err := migrate.DownTo(ctx, dsn, latest-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSchema(ctx, pool, log); err == nil || !strings.Contains(err.Error(), "run `accquix-register migrate` first") {
+		t.Fatalf("old schema: %v", err)
 	}
 }

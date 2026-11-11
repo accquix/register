@@ -39,6 +39,15 @@ The exact tool list, with every schema, is committed as `api/mcp-tools.json`.
 
 ## Connect a client
 
+<Prompt description="Let your AI agent **connect** the register's MCP tools to your client." actions={["copy"]}>
+Connect the Accquix Register MCP server to this AI client.
+
+- The instance is at `https://register.example.internal` (ask me for the real address). Check `GET /v1/capabilities` with `Authorization: Bearer <key>`: it must show `"mcp": { "enabled": true }`. If it does not, tell me to set `REGISTER_MCP=true` on the instance and stop.
+- If this client speaks Streamable HTTP (for example Claude Code or Cursor), add a server named `accquix-register` with the URL `<instance>/mcp` and the header `Authorization: Bearer <key>`. Read the key from an environment variable; never write it into a file that is committed.
+- If this client only starts local servers over stdio (for example Claude Desktop), use the command `accquix-register mcp --url <instance>` with the key in the `REGISTER_MCP_KEY` environment variable.
+- List the tools: expect `search_subjects`, `lookup_subject` and `get_data_freshness`, all read-only. Run one search to check, and show me the answer.
+</Prompt>
+
 <Tabs>
   <Tab title="Claude Code">
     ```sh

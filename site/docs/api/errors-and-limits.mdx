@@ -26,7 +26,7 @@ Errors are RFC 9457 `application/problem+json` documents with a stable `code`:
 | `forbidden` | 403 | A natural person by DIČ on an instance with anonymous access. |
 | `not_found` | 404 | Not found, and every consulted source is fresh. |
 | `rate_limited` | 429 | Too many requests; see `Retry-After`. |
-| `unavailable` | 503 | See `reason`: `bootstrapping`, `setup` (the operator has not confirmed the instance yet), `source_stale`, `timeout` or `database`. |
+| `unavailable` | 503 | See `reason`: `bootstrapping`, `setup` (the operator has not confirmed the instance yet), `source_stale`, `timeout`, `database`, or `overloaded` (the instance is at its capacity: retry after `Retry-After`). |
 
 Treat `503` as "unknown": retry later, and never as "not found".
 

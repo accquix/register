@@ -25,6 +25,7 @@ Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `N
 | `suppress --init-empty` | Potvrdí novú inštaláciu bez námietok na obnovenie. |
 | `mcp --url URL` | MCP cez stdio pre lokálneho AI klienta; posiela volania do REST API na URL. Pozrite [AI agenti (MCP)](/sk/api/mcp). |
 | `mcp-tools` | Vypíše zoznam nástrojov MCP. |
+| `demo` | Vykoná migrácie, nahrá fiktívne subjekty do novej, prázdnej databázy a natrvalo ju označí ako demo; `sync` ju potom odmietne. Pozri [Rýchly štart](/sk/quickstart#vyskúšajte-demo). |
 | `openapi` | Vypíše dokument OpenAPI 3.1. |
 | `version` | Vypíše verziu. |
 
@@ -76,4 +77,6 @@ chyba v príkazovom riadku.
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Súbežné približné vyhľadávania na inštanciu. |
 | `REGISTER_FUZZY_TIMEOUT` | `2s` | Časový limit približného vyhľadávania. |
 | `REGISTER_QUERY_TIMEOUT` | `3s` | Časový limit predvoleného vyhľadávania a overenia. |
+| `REGISTER_MAX_IN_FLIGHT` | veľkosť poolu | Koľko dátových požiadaviek inštancia vybavuje naraz. Ďalšia požiadavka čaká `REGISTER_ADMIT_WAIT` a potom dostane `503` s `reason: overloaded`, takže preťažená inštancia ďalej obsluhuje toľko, koľko zvládne. |
+| `REGISTER_ADMIT_WAIT` | `250ms` | Ako dlho požiadavka čaká na voľné miesto. |
 | `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | Adaptívny krok podľa slov v predvolenom vyhľadávaní. |

@@ -39,6 +39,15 @@ Presný zoznam nástrojov so všetkými schémami je v repozitári ako `api/mcp-
 
 ## Pripojenie klienta
 
+<Prompt description="Nechajte svojho AI agenta **pripojiť** MCP nástroje registra k vášmu klientovi." actions={["copy"]}>
+Pripoj MCP server Accquix Register k tomuto AI klientovi.
+
+- Inštancia beží na `https://register.example.internal` (opýtaj sa ma na skutočnú adresu). Skontroluj `GET /v1/capabilities` s `Authorization: Bearer <kľúč>`: musí ukázať `"mcp": { "enabled": true }`. Ak nie, povedz mi, aby som na inštancii nastavil `REGISTER_MCP=true`, a skonči.
+- Ak tento klient podporuje Streamable HTTP (napríklad Claude Code alebo Cursor), pridaj server s názvom `accquix-register`, URL `<inštancia>/mcp` a hlavičkou `Authorization: Bearer <kľúč>`. Kľúč čítaj z premennej prostredia; nikdy ho nezapisuj do súboru, ktorý sa commituje.
+- Ak tento klient spúšťa len lokálne servery cez stdio (napríklad Claude Desktop), použi príkaz `accquix-register mcp --url <inštancia>` s kľúčom v premennej prostredia `REGISTER_MCP_KEY`.
+- Vypíš nástroje: očakávaj `search_subjects`, `lookup_subject` a `get_data_freshness`, všetky len na čítanie. Na kontrolu spusti jedno vyhľadávanie a ukáž mi odpoveď.
+</Prompt>
+
 <Tabs>
   <Tab title="Claude Code">
     ```sh
