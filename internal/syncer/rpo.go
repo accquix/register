@@ -109,6 +109,7 @@ type State struct {
 		Reconcile string `json:"reconcile,omitempty"` // RPO: snapshot being reconciled
 		ETag      string `json:"etag,omitempty"`      // FS: ETag of the applied version
 		SHA256    string `json:"sha256,omitempty"`    // FS: content hash of the applied version
+		Skipped   int    `json:"skipped,omitempty"`   // FS: items of the applied version without any identifier
 	}
 	Diagnostic string
 }

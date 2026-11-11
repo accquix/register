@@ -122,8 +122,23 @@ func isDigits(s string, n int) bool {
 	return true
 }
 
-// mapRow turns one XML item into a Row. An item without its key is an error (D23: 0 parse errors).
+// MaxUnidentified is how many items of one file may be left out before the file is rejected
+// (OQ-37, D38). An item is left out, and counted, when it carries no identifier at all (it cannot
+// be found by any), or when an item of the DIČ list has a valid IČO but no DIČ yet (a new
+// business: the register knows it from RPO, and there is no DIČ to hold). More of them means
+// the export itself is broken.
+const MaxUnidentified = 100
+
+// errNoIdentifier marks an item to leave out (see MaxUnidentified): fields absent, not
+// malformed. A malformed identifier still rejects the file.
+var errNoIdentifier = errors.New("no identifier")
+
+// mapRow turns one XML item into a Row. An item without its key is an error (D23: 0 parse
+// errors), except an item with no identifier at all (errNoIdentifier, counted by the decoder).
 func mapRow(slug string, m map[string]string) (Row, error) {
+	if strings.TrimSpace(m["DIC"]) == "" && strings.TrimSpace(m["ICO"]) == "" && strings.TrimSpace(m["IC_DPH"]) == "" {
+		return Row{}, errNoIdentifier
+	}
 	r := Row{
 		ICDPH:        strings.ToUpper(strings.TrimSpace(m["IC_DPH"])),
 		DIC:          strings.TrimSpace(m["DIC"]),
@@ -146,6 +161,9 @@ func mapRow(slug string, m map[string]string) (Row, error) {
 	var err error
 	switch slug {
 	case "ds_dsrdp":
+		if r.DIC == "" && r.ICO != "" { // a valid IČO, no DIČ yet
+			return r, errNoIdentifier
+		}
 		r.Key = r.DIC
 	case "ds_dphs":
 		if r.ICDPH == "" {
@@ -209,13 +227,16 @@ func mapRow(slug string, m map[string]string) (Row, error) {
 
 // Decoder streams the items of one export.
 type Decoder struct {
-	slug   string
-	dec    *xml.Decoder
-	asOf   time.Time
-	row    Row
-	n      int
-	err    error
-	closer io.Closer
+	slug string
+	dec  *xml.Decoder
+	asOf time.Time
+	row  Row
+	n    int // items returned
+	pos  int // items read, for error messages
+	err  error
+	// skipped counts items without any identifier (at most MaxUnidentified)
+	skipped int
+	closer  io.Closer
 }
 
 // Open reads the XML entry of the ZIP at path.
@@ -323,13 +344,13 @@ func (d *Decoder) Next() bool {
 			for {
 				t, err := d.dec.Token()
 				if err != nil {
-					d.err = fmt.Errorf("item %d: %w", d.n+1, err)
+					d.err = fmt.Errorf("item %d: %w", d.pos+1, err)
 					return false
 				}
 				if f, ok := t.(xml.StartElement); ok {
 					v, err := d.text()
 					if err != nil {
-						d.err = fmt.Errorf("item %d: %w", d.n+1, err)
+						d.err = fmt.Errorf("item %d: %w", d.pos+1, err)
 						return false
 					}
 					m[f.Name.Local] = strings.TrimSpace(v)
@@ -340,8 +361,16 @@ func (d *Decoder) Next() bool {
 				}
 			}
 			r, err := mapRow(d.slug, m)
+			d.pos++
+			if errors.Is(err, errNoIdentifier) {
+				if d.skipped++; d.skipped > MaxUnidentified {
+					d.err = fmt.Errorf("more than %d items without any identifier (DIC, ICO, IC_DPH), or with an IČO but no DIČ in the DIČ list; the latest is item %d", MaxUnidentified, d.pos)
+					return false
+				}
+				continue
+			}
 			if err != nil {
-				d.err = fmt.Errorf("item %d: %w", d.n+1, err)
+				d.err = fmt.Errorf("item %d: %w", d.pos, err)
 				return false
 			}
 			d.row = r
@@ -354,8 +383,11 @@ func (d *Decoder) Next() bool {
 // Row returns the current item.
 func (d *Decoder) Row() Row { return d.row }
 
-// Count is the number of items read.
+// Count is the number of items read, without the skipped ones.
 func (d *Decoder) Count() int { return d.n }
+
+// Skipped is the number of items left out because they carry no identifier at all.
+func (d *Decoder) Skipped() int { return d.skipped }
 
 // Err returns the first error.
 func (d *Decoder) Err() error { return d.err }

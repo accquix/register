@@ -22,8 +22,10 @@ GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
     {
       "mode": "default",
       "results": [
-        { "ico": "99900001", "name": "Zlatá Rybka, s.r.o.", "municipality": "Fiktívne Mesto", "kind": "legal_person", "active": true },
-        { "ico": "99900002", "name": "Strieborná Rybka, a.s.", "municipality": "Fiktívne Mesto", "kind": "legal_person", "active": true }
+        { "ico": "99900001", "name": "Zlatá Rybka, s.r.o.", "municipality": "Fiktívne Mesto",
+          "address": { "street": "Testovacia", "buildingNumber": "1", "postalCode": "999 99", "municipality": "Fiktívne Mesto", "country": "Slovenská republika" }, "kind": "legal_person", "active": true },
+        { "ico": "99900002", "name": "Strieborná Rybka, a.s.", "municipality": "Fiktívne Mesto",
+          "address": { "street": "Testovacia", "buildingNumber": "1", "postalCode": "999 99", "municipality": "Fiktívne Mesto", "country": "Slovenská republika" }, "kind": "legal_person", "active": true }
       ],
       "dataAsOf": "2026-11-10",
       "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
@@ -62,6 +64,7 @@ GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
 | `name` | The display name, with diacritics and legal form. |
 | `matchedName` | The official name that matched, when it is not the display name (a sole trader's other name). |
 | `municipality` | Municipality of the seat or place of business. |
+| `address` | The full seat or place of business as published in RPO: `street`, `buildingNumber`, `postalCode`, `municipality`, `country`. The same as in the lookup. |
 | `kind` | `legal_person`, `sole_trader`, `public_body` or `other`. |
 | `active` | `false` only for a terminated subject found by identifier. |
 | `typos` | Fuzzy only: corrections needed. |

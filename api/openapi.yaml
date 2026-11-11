@@ -90,6 +90,9 @@ components:
           type: string
         fuzzy:
           $ref: "#/components/schemas/CapabilitiesBodyFuzzyStruct"
+        mcp:
+          $ref: "#/components/schemas/CapabilitiesBodyMCPStruct"
+          description: The read-only MCP adapter for AI agents
         rate:
           $ref: "#/components/schemas/CapabilitiesBodyRateStruct"
           description: Per caller, per instance
@@ -108,6 +111,7 @@ components:
         - search
         - fuzzy
         - rate
+        - mcp
       type: object
     CapabilitiesBodyFuzzyStruct:
       additionalProperties: false
@@ -126,6 +130,16 @@ components:
       required:
         - enabled
         - note
+      type: object
+    CapabilitiesBodyMCPStruct:
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        path:
+          type: string
+      required:
+        - enabled
       type: object
     CapabilitiesBodyRateStruct:
       additionalProperties: false
@@ -161,6 +175,9 @@ components:
       properties:
         active:
           type: boolean
+        address:
+          $ref: "#/components/schemas/Address"
+          description: The registered seat or place of business, as published in RPO
         ico:
           type: string
         kind:
@@ -424,6 +441,10 @@ components:
         publishedAsOf:
           description: Date the published data was stamped by the agency
           type: string
+        skippedItems:
+          description: "Items of the published file left out: no identifier at all, or (in the DIČ list) an IČO without a DIČ yet. More than 100 blocks the list"
+          format: int64
+          type: integer
         source:
           type: string
         stale:

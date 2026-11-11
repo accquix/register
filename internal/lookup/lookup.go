@@ -45,6 +45,7 @@ type SourceInfo struct {
 	Stale         bool   `json:"stale"`
 	MaxAgeDays    int    `json:"maxAgeDays"`
 	Diagnostic    string `json:"diagnostic,omitempty"`
+	SkippedItems  int    `json:"skippedItems,omitempty" doc:"Items of the published file left out: no identifier at all, or (in the DIČ list) an IČO without a DIČ yet. More than 100 blocks the list"`
 }
 
 func (s SourceInfo) published() bool { return s.PublishedAsOf != "" }
@@ -58,7 +59,8 @@ type Store struct {
 
 // Sources returns every expected source, published or not.
 func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT source, state, published_as_of, coalesce(diagnostic, '') FROM sync_source`)
+	rows, err := s.Pool.Query(ctx, `SELECT source, state, published_as_of, coalesce(diagnostic, ''),
+  coalesce((cursor->>'skipped')::int, 0) FROM sync_source`)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +73,7 @@ func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 	for rows.Next() {
 		var si SourceInfo
 		var pub *time.Time
-		if err := rows.Scan(&si.Source, &si.State, &pub, &si.Diagnostic); err != nil {
+		if err := rows.Scan(&si.Source, &si.State, &pub, &si.Diagnostic, &si.SkippedItems); err != nil {
 			return nil, err
 		}
 		si.MaxAgeDays = defaultFSMaxAge

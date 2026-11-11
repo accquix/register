@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -38,6 +40,11 @@ type Config struct {
 	FuzzyTimeout    time.Duration
 	QueryTimeout    time.Duration
 	Search          search.Config
+	// MCP serves the read-only MCP adapter at /mcp (REGISTER_MCP, D36).
+	MCP bool
+	// MCPAllowedOrigins are browser origins allowed to call /mcp; empty refuses every
+	// cross-origin browser request (REGISTER_MCP_ALLOWED_ORIGINS).
+	MCPAllowedOrigins []string
 }
 
 // Server holds the dependencies of the handlers.
@@ -94,6 +101,9 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 	s.register(api)
 	router.Get("/livez", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	router.Get("/readyz", s.readyz)
+	if cfg.MCP {
+		router.Handle(MCPPath, s.mcpHandler(router))
+	}
 	return router, api
 }
 
@@ -105,9 +115,11 @@ type Card struct {
 	Name         string `json:"name" doc:"Display name, with diacritics and legal form"`
 	MatchedName  string `json:"matchedName,omitempty" doc:"The official name that matched, when it is not the display name"`
 	Municipality string `json:"municipality,omitempty"`
-	Kind         string `json:"kind" enum:"legal_person,sole_trader,public_body,other"`
-	Active       bool   `json:"active"`
-	Typos        int    `json:"typos,omitempty" doc:"fuzzy only: corrections needed"`
+	// The same record and order as the lookup's identity section, so both show one address.
+	Address *lookup.Address `json:"address,omitempty" doc:"The registered seat or place of business, as published in RPO"`
+	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other"`
+	Active  bool            `json:"active"`
+	Typos   int             `json:"typos,omitempty" doc:"fuzzy only: corrections needed"`
 }
 
 type SearchInput struct {
@@ -196,6 +208,10 @@ type CapabilitiesBody struct {
 		PerSecond float64 `json:"perSecond"`
 		Burst     int     `json:"burst"`
 	} `json:"rate" doc:"Per caller, per instance"`
+	MCP struct {
+		Enabled bool   `json:"enabled"`
+		Path    string `json:"path,omitempty"`
+	} `json:"mcp" doc:"The read-only MCP adapter for AI agents"`
 }
 
 type CapabilitiesOutput struct{ Body CapabilitiesBody }
@@ -315,6 +331,7 @@ WHERE n.skey = ANY($1) AND n.is_primary AND `+search.NotSuppressed, keys)
 		return nil, err
 	}
 	type prim struct{ ico, name, muni, kind string }
+	var outKeys []string
 	byKey := map[string]prim{}
 	for rows.Next() {
 		var k string
@@ -339,8 +356,56 @@ WHERE n.skey = ANY($1) AND n.is_primary AND `+search.NotSuppressed, keys)
 			c.MatchedName = h.Name
 		}
 		out = append(out, c)
+		outKeys = append(outKeys, h.SKey)
 	}
-	return out, nil
+	return out, s.addAddresses(ctx, out, outKeys)
+}
+
+// addAddresses sets each card's address from its subject's display record, chosen like the
+// lookup's identity section: an active record first, then the Commercial or Trade Register,
+// then the newest. keys are the cards' subject keys: an IČO, or r<RPO id>.
+func (s *Server) addAddresses(ctx context.Context, cards []Card, keys []string) error {
+	if len(cards) == 0 {
+		return nil
+	}
+	var icos []string
+	var ids []int64
+	for _, k := range keys {
+		if id, err := strconv.ParseInt(strings.TrimPrefix(k, "r"), 10, 64); strings.HasPrefix(k, "r") && err == nil {
+			ids = append(ids, id)
+		} else {
+			icos = append(icos, k)
+		}
+	}
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (k) k, coalesce(street, ''), coalesce(building_number, ''),
+  coalesce(postal_code, ''), coalesce(municipality, ''), coalesce(country, '')
+FROM (SELECT ico AS k, * FROM rpo_record WHERE ico = ANY($1) AND removed_at IS NULL
+      UNION ALL
+      SELECT 'r' || id, * FROM rpo_record WHERE id = ANY($2) AND removed_at IS NULL) x
+ORDER BY k, terminated_on IS NULL DESC, (coalesce(register_code, '') IN ('1', '2')) DESC, src_date DESC, changed_at DESC, id DESC`, icos, ids)
+	if err != nil {
+		return err
+	}
+	byKey := map[string]*lookup.Address{}
+	for rows.Next() {
+		var k string
+		var a lookup.Address
+		if err := rows.Scan(&k, &a.Street, &a.BuildingNumber, &a.PostalCode, &a.Municipality, &a.Country); err != nil {
+			rows.Close()
+			return err
+		}
+		if a != (lookup.Address{}) {
+			byKey[k] = &a
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range cards {
+		cards[i].Address = byKey[keys[i]]
+	}
+	return nil
 }
 
 // identifierCards answers an identifier typed into the search box: exact, never fuzzy (D20).
@@ -367,6 +432,7 @@ func (s *Server) identifierCards(ctx context.Context, kind normalize.Kind, id st
 		}
 	}
 	out := []Card{}
+	var keys []string
 	for _, ico := range icos {
 		var c Card
 		var term *time.Time
@@ -382,8 +448,9 @@ ORDER BY terminated_on IS NULL DESC, (coalesce(register_code, '') IN ('1', '2'))
 		}
 		c.ICO, c.Active = ico, term == nil
 		out = append(out, c)
+		keys = append(keys, ico)
 	}
-	return out, nil
+	return out, s.addAddresses(ctx, out, keys)
 }
 
 // lookupOne resolves one identifier. It returns a Problem for 4xx/5xx outcomes.
@@ -520,6 +587,9 @@ func (s *Server) capabilities(_ context.Context, _ *struct{}) (*CapabilitiesOutp
 		b.Fuzzy.PerKeyEvery, b.Fuzzy.Concurrency, b.Fuzzy.Timeout = s.cfg.FuzzyEvery.String(), s.cfg.FuzzyConcurrent, s.cfg.FuzzyTimeout.String()
 	}
 	b.Rate.PerSecond, b.Rate.Burst = s.cfg.RatePerSecond, s.cfg.RateBurst
+	if s.cfg.MCP {
+		b.MCP.Enabled, b.MCP.Path = true, MCPPath
+	}
 	return &CapabilitiesOutput{Body: b}, nil
 }
 

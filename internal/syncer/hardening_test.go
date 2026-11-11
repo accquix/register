@@ -347,3 +347,67 @@ func TestBootstrapTrustsOnlyASettledWholeSnapshot(t *testing.T) {
 		eq(t, "only the published snapshot's records", strs(t, conn, `SELECT id::text FROM rpo_record`), []string{"900000005", "900000006"})
 	})
 }
+
+// OQ-37 (D38): items with no identifier at all are left out and counted, up to fs.MaxUnidentified
+// per file; they change no other threshold, and more of them blocks the list as before.
+func TestFSSkipsItemsWithoutAnyIdentifier(t *testing.T) {
+	ctx := context.Background()
+	conn := testkit.Conn(t, testkit.Database(t))
+	srv := testkit.NewFSServer(t)
+	s := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), SkipMinRows: true})
+	noID := func(n int) []testkit.Item {
+		out := make([]testkit.Item, n)
+		for i := range out {
+			out[i] = testkit.Item{"NAZOV_DS": "Fiktívna Osoba", "OBEC": "Fiktívne Mesto"}
+		}
+		return out
+	}
+	day := time.Now().UTC().Format("2006-01-02")
+	for _, l := range fs.Lists {
+		if l.Slug != "ds_dsrdp" {
+			srv.Put(l.Slug, testkit.FSZip(l.Slug, day, nil))
+		}
+	}
+	state := func() syncer.State {
+		st, err := syncer.LoadState(ctx, conn, syncer.Source("ds_dsrdp"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, append(taxItems(1, 100), noID(6)...)))
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(); st.State != "daily" || st.Cursor.Skipped != 6 {
+		t.Fatalf("six unidentified items must not block: %+v", st)
+	}
+	if n := num(t, conn, `SELECT count(*) FROM fs_tax_subject WHERE absent_since IS NULL`); n != 100 {
+		t.Fatalf("tax subjects: %d", n)
+	}
+
+	// the next version without them: the count goes back to 0, nothing is marked absent
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, taxItems(1, 100)))
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(); st.State != "daily" || st.Cursor.Skipped != 0 {
+		t.Fatalf("second version: %+v", st)
+	}
+	if n := num(t, conn, `SELECT count(*) FROM fs_tax_subject WHERE absent_since IS NULL`); n != 100 {
+		t.Fatalf("tax subjects after the second version: %d", n)
+	}
+
+	// over the cap: the list is blocked and the published data stays
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, append(taxItems(1, 100), noID(fs.MaxUnidentified+1)...)))
+	if err := s.Run(ctx); !errors.Is(err, syncer.ErrBlocked) {
+		t.Fatalf("over the cap: %v", err)
+	}
+	if st := state(); st.State != "blocked" || !strings.Contains(st.Diagnostic, "without any identifier") {
+		t.Fatalf("over the cap: %+v", st)
+	}
+	if n := num(t, conn, `SELECT count(*) FROM fs_tax_subject WHERE absent_since IS NULL`); n != 100 {
+		t.Fatalf("a blocked version must not change the data: %d", n)
+	}
+}

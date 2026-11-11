@@ -25,7 +25,8 @@ type FSUnit struct {
 // FSResult describes an applied list version.
 type FSResult struct {
 	AsOf       time.Time
-	Items      int   // items in the file
+	Items      int   // items in the file, without the skipped ones
+	Skipped    int   // items without any identifier, left out (OQ-37)
 	Distinct   int   // distinct keys
 	Duplicates int   // items dropped as duplicates of a key
 	Conflicts  int   // keys whose duplicates differ in content (kept: the lowest row hash)
@@ -110,7 +111,7 @@ func ApplyFS(ctx context.Context, conn *pgx.Conn, u FSUnit) (FSResult, error) {
 	if derr := dec.Err(); derr != nil {
 		return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, derr)
 	}
-	res.AsOf, res.Items = dec.AsOf(), dec.Count()
+	res.AsOf, res.Items, res.Skipped = dec.AsOf(), dec.Count(), dec.Skipped()
 	now := time.Now
 	if u.Now != nil {
 		now = u.Now

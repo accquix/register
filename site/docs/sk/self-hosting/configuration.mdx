@@ -23,6 +23,8 @@ Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `N
 | `suppress --export --output FILE [--overwrite]` | Zapíše zálohu námietok. Súbor uchovávajte v súkromí. |
 | `suppress --restore FILE` | Obnoví zálohu (`-` číta štandardný vstup) a potvrdí inštaláciu. |
 | `suppress --init-empty` | Potvrdí novú inštaláciu bez námietok na obnovenie. |
+| `mcp --url URL` | MCP cez stdio pre lokálneho AI klienta; posiela volania do REST API na URL. Pozrite [AI agenti (MCP)](/sk/api/mcp). |
+| `mcp-tools` | Vypíše zoznam nástrojov MCP. |
 | `openapi` | Vypíše dokument OpenAPI 3.1. |
 | `version` | Vypíše verziu. |
 
@@ -66,6 +68,9 @@ chyba v príkazovom riadku.
 | `REGISTER_API_KEYS` (tajomstvo) | — | `meno:sha256hex,…`: odtlačky kľúčov. |
 | `REGISTER_ALLOW_ANONYMOUS` | `false` | Prevádzka bez kľúčov; vypne overenie fyzických osôb podľa DIČ. |
 | `REGISTER_SEARCH_FUZZY` | `true` | Zapne `mode=fuzzy`. |
+| `REGISTER_MCP` | `false` | Sprístupní MCP endpoint `/mcp` len na čítanie pre AI agentov. |
+| `REGISTER_MCP_ALLOWED_ORIGINS` | — | Pôvody prehliadača, ktoré smú volať `/mcp`, oddelené čiarkou. Prázdne odmietne všetky. |
+| `REGISTER_MCP_KEY` (tajomstvo) | — | Pre `mcp --url`: API kľúč, ktorý sa posiela inštancii. |
 | `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket pre každého klienta a inštanciu. |
 | `REGISTER_FUZZY_EVERY` | `5s` | Jedno približné vyhľadávanie na klienta za interval (nárazovo 2). |
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Súbežné približné vyhľadávania na inštanciu. |

@@ -52,6 +52,11 @@ zmenšil, chyba pri spracovaní, starší dátum zoznamu), sa neaplikuje. Predch
 zdroj prejde do stavu `blocked` s diagnostikou, kým sa naň nepozrie prevádzkovateľ. Pozrite
 [Prevádzka](/sk/self-hosting/operations).
 
+Jeden prípad nie je chyba. Položka zoznamu bez akéhokoľvek identifikátora (bez DIČ, IČO aj IČ DPH) alebo položka
+zoznamu daňových subjektov s IČO, ale zatiaľ bez DIČ, nemôže patriť žiadnemu subjektu, ktorý register vie pomenovať.
+Vynechá sa a započíta (`skippedItems` v `GET /v1/sources`); viac ako 100 v jednom súbore zoznam zablokuje. Takéto
+položky sa nikdy nepriraďujú k firme podľa mena ani adresy.
+
 ## Vyhľadávacia vrstva
 
 Po každom súbore synchronizácia obnoví vyhľadávacie riadky subjektov, ktorých sa súbor dotkol: každý oficiálny

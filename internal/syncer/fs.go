@@ -120,7 +120,7 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 			ns := st
 			day := fmtDay(r.AsOf)
 			ns.State, ns.AppliedThrough, ns.PublishedAsOf, ns.Diagnostic, ns.PreviousState = "daily", day, day, "", ""
-			ns.Cursor.ETag, ns.Cursor.SHA256 = f.ETag, f.SHA256
+			ns.Cursor.ETag, ns.Cursor.SHA256, ns.Cursor.Skipped = f.ETag, f.SHA256, r.Skipped
 			return saveState(ctx, tx, src, ns)
 		},
 	})
@@ -139,7 +139,7 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 		return fmt.Errorf("%w: %s", ErrBlocked, st.Diagnostic)
 	}
 	s.cfg.Log.Info("fs list applied", "list", l.Slug, "as_of", fmtDay(res.AsOf), "items", res.Items, "inserted", res.Inserted,
-		"updated", res.Updated, "absent", res.Absent, "duplicates", res.Duplicates, "conflicts", res.Conflicts,
+		"updated", res.Updated, "absent", res.Absent, "duplicates", res.Duplicates, "conflicts", res.Conflicts, "skipped", res.Skipped,
 		"duration", time.Since(t0).Round(time.Millisecond))
 	return nil
 }

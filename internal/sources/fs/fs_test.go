@@ -2,6 +2,7 @@ package fs_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,11 +87,11 @@ func TestParseErrorsReject(t *testing.T) {
 		slug string
 		item testkit.Item
 	}{
-		"missing DIC":    {"ds_dsrdp", testkit.Item{"NAZOV_DS": "x"}},
+		"malformed IČO":  {"ds_dsrdp", testkit.Item{"ICO": "123", "NAZOV_DS": "x"}},
 		"bad IC_DPH":     {"ds_dphs", testkit.Item{"IC_DPH": "SK12", "DRUH_REG_DPH": "§4"}},
 		"bad paragraph":  {"ds_dphs", testkit.Item{"IC_DPH": "SK2099900001", "DRUH_REG_DPH": "§99"}},
 		"bad date":       {"ds_dphs", testkit.Item{"IC_DPH": "SK2099900001", "DRUH_REG_DPH": "§4", "DATUM_REG": "2020-08-01"}},
-		"missing IC_DPH": {"ds_dphz", testkit.Item{"DAT_ZVEREJNENIA": "25.02.2021"}},
+		"missing IC_DPH": {"ds_dphz", testkit.Item{"ICO": "99900001", "DAT_ZVEREJNENIA": "25.02.2021"}},
 		"bad DIC":        {"ds_iz_ran", testkit.Item{"DIC": "12"}},
 	}
 	for name, c := range cases {
@@ -118,5 +119,58 @@ func TestConditionalFetch(t *testing.T) {
 	}
 	if _, err := c.Fetch(context.Background(), "ds_missing", "", dir); err == nil {
 		t.Fatal("want an error for a missing list")
+	}
+}
+
+// unidentified mirrors the real items of 2026-11-11 (OQ-37): a name, sometimes an address, and
+// no DIČ, IČO or IČ DPH at all. The names and the address are fictional.
+func unidentified(n int) []testkit.Item {
+	out := make([]testkit.Item, n)
+	for i := range out {
+		out[i] = testkit.Item{"NAZOV_DS": fmt.Sprintf("Fiktívna Osoba %d", i)}
+		if i%3 == 0 {
+			out[i]["OBEC"], out[i]["PSC"], out[i]["ULICA_CISLO"], out[i]["NAZOV_STATU"] = "Fiktívne Mesto", "99999", "Testovacia 1", "Slovensko"
+		}
+	}
+	return out
+}
+
+func TestUnidentifiedItemsAreSkipped(t *testing.T) {
+	items := []testkit.Item{testkit.TaxItem(1, "99900001")}
+	items = append(items, unidentified(3)...)
+	items = append(items, testkit.TaxItem(2, "99900002"))
+	items = append(items, unidentified(3)...)
+	items = append(items, testkit.TaxItem(3, ""))
+	rows, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", items))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || d.Count() != 3 || d.Skipped() != 6 {
+		t.Fatalf("rows %d, count %d, skipped %d", len(rows), d.Count(), d.Skipped())
+	}
+	if rows[1].DIC != "2099900002" || rows[2].ICO != "" {
+		t.Fatalf("the identified items around the skipped ones must be kept as they are: %+v", rows)
+	}
+
+	// up to the cap the file passes; one more rejects it
+	ok := append([]testkit.Item{testkit.TaxItem(1, "99900001")}, unidentified(fs.MaxUnidentified)...)
+	if _, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", ok)); err != nil || d.Skipped() != fs.MaxUnidentified {
+		t.Fatalf("at the cap: %v", err)
+	}
+	over := append(append([]testkit.Item{}, ok...), unidentified(1)...)
+	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", over)); err == nil || !strings.Contains(err.Error(), "without any identifier") {
+		t.Fatalf("over the cap: %v", err)
+	}
+
+	// a new sole trader: a valid IČO, no DIČ yet. Not an error, and nothing for the DIČ list to hold
+	newTrader := []testkit.Item{testkit.TaxItem(1, "99900001"), {"ICO": "99900002", "NAZOV_DS": "Nová Živnosť"}}
+	if rows, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", newTrader)); err != nil || len(rows) != 1 || d.Skipped() != 1 {
+		t.Fatalf("IČO without DIČ: %v %d", err, len(rows))
+	}
+
+	// a malformed identifier is not "no identifier": it still rejects, with the item's position
+	bad := []testkit.Item{testkit.TaxItem(1, "99900001"), {"NAZOV_DS": "x"}, {"DIC": "12", "NAZOV_DS": "y"}}
+	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", bad)); err == nil || !strings.Contains(err.Error(), "item 3:") {
+		t.Fatalf("a malformed DIČ after a skipped item: %v", err)
 	}
 }

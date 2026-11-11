@@ -9,7 +9,7 @@ description: Monitoring, blocked sources, objections, upgrades and rebuilds.
 | --- | --- |
 | `GET /livez` | The process is up. |
 | `GET /readyz` | `503` until every source is first published, or when the database is unreachable. |
-| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`. |
+| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`, `skippedItems`. |
 
 Alert when:
 

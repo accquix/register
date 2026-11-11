@@ -50,6 +50,11 @@ the next pass redoes only the unfinished file, and re-applying a file writes not
 a parse error, an older list date) is not applied. The previous data stays served, and the source becomes
 `blocked` with a diagnostic until an operator looks at it. See [Operations](/self-hosting/operations).
 
+One case is not an error. A list item with no identifier at all (no DIČ, IČO or IČ DPH), or an item of the taxpayer
+list with an IČO but no DIČ yet, cannot belong to any subject the register can name. It is left out and counted
+(`skippedItems` in `GET /v1/sources`); more than 100 in one file blocks the list. Such items are never matched to a
+business by name or address.
+
 ## The search layer
 
 After each file, the sync refreshes the search rows of the subjects that file touched: every official name of each

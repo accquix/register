@@ -78,8 +78,9 @@ func populate(t *testing.T, dsn string) {
 		group(1001, "99900002"), group(1002, "99900003"),
 	}))
 	tax1 := testkit.TaxItem(1, "99900001")
-	person := testkit.TaxItem(50, "") // a natural person without an IČO
-	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day(0), []testkit.Item{tax1, person}))
+	person := testkit.TaxItem(50, "")                                     // a natural person without an IČO
+	noID := testkit.Item{"NAZOV_DS": "Fiktívna Osoba Bez Identifikátora"} // OQ-37: left out and counted
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day(0), []testkit.Item{tax1, noID, person, noID}))
 	srv.Put("ds_iz_ran", testkit.FSZip("ds_iz_ran", day(0), []testkit.Item{{"DIC": "2099900001", "ICO": "99900001", "IDS": "spoľahlivý"}}))
 	srv.Put("ds_dphz", testkit.FSZip("ds_dphz", day(0), nil))
 	srv.Put("ds_dphv", testkit.FSZip("ds_dphv", day(0), nil))
@@ -204,6 +205,43 @@ func TestAPI(t *testing.T) {
 		r0, _ := m["results"].([]any)
 		if len(r0) != 1 || path(r0[0], "ico") != "99900004" {
 			t.Fatalf("alternative name: %v", m)
+		}
+	})
+
+	t.Run("sources report items left out for having no identifier", func(t *testing.T) {
+		_, _, m := e.get(t, "/v1/sources", true)
+		for _, x := range m["sources"].([]any) {
+			src := x.(map[string]any)
+			want := 0.0
+			if src["source"] == "fs:ds_dsrdp" {
+				want = 2
+			}
+			got, _ := src["skippedItems"].(float64)
+			if got != want {
+				t.Fatalf("%v: skippedItems %v, want %v", src["source"], src["skippedItems"], want)
+			}
+		}
+	})
+
+	t.Run("search cards carry the full address, the same as the lookup", func(t *testing.T) {
+		for _, p := range []string{"/v1/search?q=" + q("kadernictvo lucia"), "/v1/search?q=99900004"} {
+			_, _, m := e.get(t, p, true)
+			rs, _ := m["results"].([]any)
+			if len(rs) == 0 {
+				t.Fatalf("%s: no results %v", p, m)
+			}
+			card := rs[0].(map[string]any)
+			_, _, lk := e.get(t, "/v1/lookup/"+card["ico"].(string), true)
+			want := path(lk["subjects"].([]any)[0], "identity", "address")
+			got := card["address"]
+			if got == nil || path(got, "street") != "Živnostenská" || path(got, "postalCode") != "988 88" {
+				t.Fatalf("%s: card address %v", p, got)
+			}
+			gb, _ := json.Marshal(got)
+			wb, _ := json.Marshal(want)
+			if !bytes.Equal(gb, wb) {
+				t.Fatalf("%s: card address %s differs from the lookup's %s", p, gb, wb)
+			}
 		}
 	})
 

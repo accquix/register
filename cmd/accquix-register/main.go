@@ -12,12 +12,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,6 +31,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/accquix/register/internal/api"
 	"github.com/accquix/register/internal/config"
@@ -59,6 +63,9 @@ modes:
   suppress --restore FILE         put a backup back ("-" reads standard input)
   suppress --init-empty           confirm a new installation with no objections to restore
   sync --unblock --source S       after a validation block (S: rpo or fs:<list>)
+  mcp --url URL                   MCP over stdio for a local AI client, forwarding to the REST API of
+                                  the instance at URL (key: REGISTER_MCP_KEY or REGISTER_MCP_KEY_FILE)
+  mcp-tools                       print the MCP tool list (JSON)
   openapi                         print the OpenAPI 3.1 document (YAML)
   version                         print the version
 
@@ -105,6 +112,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, env confi
 		err = runServe(ctx, cfg, log)
 	case "suppress":
 		err = runSuppress(ctx, cfg, rest, os.Stdin, stdout)
+	case "mcp":
+		err = runMCP(ctx, cfg, rest, os.Stdin, stdout, log)
+	case "mcp-tools":
+		var b []byte
+		if b, err = api.MCPToolsJSON(); err == nil {
+			_, err = stdout.Write(b)
+		}
 	case "openapi":
 		err = runOpenAPI(stdout)
 	default:
@@ -267,6 +281,7 @@ func apiConfig(cfg config.Config, keys api.Keys) api.Config {
 	return api.Config{
 		Version: version, Keys: keys, AllowAnonymous: cfg.AllowAnonymous, Fuzzy: cfg.SearchFuzzy,
 		RatePerSecond: cfg.RatePerSecond, RateBurst: cfg.RateBurst, FuzzyEvery: cfg.FuzzyEvery,
+		MCP: cfg.MCP, MCPAllowedOrigins: cfg.MCPAllowedOrigins,
 		FuzzyConcurrent: cfg.FuzzyConcurrent, FuzzyTimeout: cfg.FuzzyTimeout, QueryTimeout: cfg.QueryTimeout,
 		Search: search.Config{WordStepMax: cfg.WordStepMax, WordCap: cfg.WordCap},
 	}
@@ -293,7 +308,7 @@ func runServe(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("serving", "listen", cfg.Listen, "keys", len(keys), "anonymous", cfg.AllowAnonymous, "fuzzy", cfg.SearchFuzzy)
+	log.Info("serving", "listen", cfg.Listen, "keys", len(keys), "anonymous", cfg.AllowAnonymous, "fuzzy", cfg.SearchFuzzy, "mcp", cfg.MCP)
 	select {
 	case err := <-errc:
 		return err
@@ -302,6 +317,52 @@ func runServe(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
+}
+
+// runMCP serves the MCP tools over stdio for a local client (Claude Desktop and similar). Every
+// tool call goes to the REST API of the instance at --url; this process never sees the database.
+// stdout carries the protocol only; logs go to stderr.
+func runMCP(ctx context.Context, cfg config.Config, args []string, stdin io.Reader, stdout io.Writer, log *slog.Logger) error {
+	fset := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	fset.SetOutput(io.Discard)
+	base := fset.String("url", "", "base URL of the instance, e.g. https://register.example.internal")
+	if err := fset.Parse(args); err != nil || fset.NArg() > 0 {
+		return fmt.Errorf("%w: mcp --url URL", errUsage)
+	}
+	u, err := url.Parse(*base)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("%w: mcp: --url must be an http(s) URL", errUsage)
+	}
+	if u.Scheme == "http" && !isLoopback(u.Hostname()) {
+		log.Warn("mcp: the API key is sent over plain http to a non-local host; use https")
+	}
+	call := api.HTTPCaller(*base, cfg.MCPKey, &http.Client{Timeout: 30 * time.Second})
+	status, _, body, err := call(ctx, "/v1/capabilities", nil)
+	if err != nil {
+		return fmt.Errorf("mcp: cannot reach the instance: %w", err)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("mcp: the instance answered %d to /v1/capabilities (is REGISTER_MCP_KEY set?)", status)
+	}
+	var caps api.CapabilitiesBody
+	if err := json.Unmarshal(body, &caps); err != nil {
+		return fmt.Errorf("mcp: unexpected /v1/capabilities answer: %w", err)
+	}
+	srv := api.NewMCPServer(call, api.MCPOptions{Version: caps.Version, Fuzzy: caps.Fuzzy.Enabled, Log: log})
+	log.Info("mcp: serving over stdio", "instance", u.Host, "version", caps.Version)
+	return srv.Run(ctx, &mcp.IOTransport{Reader: io.NopCloser(stdin), Writer: nopWriteCloser{stdout}})
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func runOpenAPI(stdout io.Writer) error {

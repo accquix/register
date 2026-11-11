@@ -23,6 +23,8 @@ to a file holding the value; setting both is an error.
 | `suppress --export --output FILE [--overwrite]` | Writes the backup of the objections. Keep the file private. |
 | `suppress --restore FILE` | Puts a backup back (`-` reads standard input) and confirms the installation. |
 | `suppress --init-empty` | Confirms a new installation with no objections to restore. |
+| `mcp --url URL` | MCP over stdio for a local AI client; forwards to the REST API at URL. See [AI agents (MCP)](/api/mcp). |
+| `mcp-tools` | Prints the MCP tool list. |
 | `openapi` | Prints the OpenAPI 3.1 document. |
 | `version` | Prints the version. |
 
@@ -66,6 +68,9 @@ command-line mistake.
 | `REGISTER_API_KEYS` (secret) | — | `name:sha256hex,…`: hashes of the keys. |
 | `REGISTER_ALLOW_ANONYMOUS` | `false` | Serve without keys; disables the natural-person DIČ lookup. |
 | `REGISTER_SEARCH_FUZZY` | `true` | Enables `mode=fuzzy`. |
+| `REGISTER_MCP` | `false` | Serves the read-only MCP endpoint `/mcp` for AI agents. |
+| `REGISTER_MCP_ALLOWED_ORIGINS` | — | Browser origins allowed to call `/mcp`, comma-separated. Empty refuses all. |
+| `REGISTER_MCP_KEY` (secret) | — | For `mcp --url`: the API key sent to the instance. |
 | `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket per caller, per instance. |
 | `REGISTER_FUZZY_EVERY` | `5s` | One fuzzy search per caller per interval (burst 2). |
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches at once, per instance. |

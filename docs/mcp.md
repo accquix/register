@@ -1,7 +1,6 @@
 # MCP adapter: feature contract (v1.1)
 
-**Status: proposed (2026-11-10), awaiting the maintainers' approval (OQ-30).** Once approved, the
-binding parts move to [decisions.md](decisions.md) and this document becomes the design reference.
+**Status: approved (2026-11-11, D36).** This is the design reference of the adapter.
 
 ## Goal
 
@@ -60,10 +59,10 @@ The adapter is a second door into the same service, not a second service:
 All tools are annotated `readOnlyHint: true`, `idempotentHint: true`, `destructiveHint: false`,
 `openWorldHint: false`. Each result carries:
 
-- `structuredContent`: **the REST response body, unchanged** (same schema; the tool's
-  `outputSchema` is generated from the OpenAPI components);
-- one short text block for clients that ignore structured content, always ending with the
-  attribution line.
+- `structuredContent`: **the REST response body, unchanged**. The tool's `outputSchema` is generated from
+  the same Go response types that the OpenAPI document is generated from;
+- text content for clients that pass only text to the model: a short summary ending with the
+  attribution, then the same body as JSON.
 
 | Tool | REST | Input | Notes |
 | --- | --- | --- | --- |
@@ -144,9 +143,8 @@ accquix-register mcp --url https://register.example.internal
 One page in the site, English and Slovak: enabling `REGISTER_MCP`, connecting Claude Code, Cursor and
 Claude Desktop (local adapter), what the agent may and may not conclude from `unknown`.
 
-## Open points for approval
+## Resolved (D36)
 
-1. **Library:** the official Go SDK (`github.com/modelcontextprotocol/go-sdk`) is preferred over a
-   third-party one, if its stateless Streamable HTTP mode covers the contract.
-2. Whether `lookup:batch` should be a tool after all (for example "check these 40 suppliers").
-3. Estimate: about one day for `/mcp`, half a day for the local adapter, plus documentation.
+1. **Library:** the official Go SDK (`github.com/modelcontextprotocol/go-sdk`), in its stateless mode with JSON
+   responses.
+2. **No batch tool** for now: an agent calls `lookup_subject` per identifier. Revisit if real use asks for it.

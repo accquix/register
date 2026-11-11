@@ -8,7 +8,7 @@
 | [architecture.md](architecture.md) | v1 design: data model, API, sync pipeline, personal data, deployment |
 | [sources.md](sources.md) | Sources, URLs, licences, file layouts, quirks, measured volumes |
 | [open-questions.md](open-questions.md) | What is still open |
-| [mcp.md](mcp.md) | Proposed contract of the MCP adapter for AI agents (v1.1, OQ-30) |
+| [mcp.md](mcp.md) | The MCP adapter for AI agents: design and contract (D36) |
 | [publication-checklist.md](publication-checklist.md) | GitHub settings and checks for making the repository public |
 | [measurement-spike.md](measurement-spike.md) | The measurement plan and pass thresholds |
 | [spike-results.md](spike-results.md) | Measured results of the spike (2026-11-10) and the proposed design changes |

@@ -21,6 +21,8 @@ This page lists what is implemented so far. It grows with each stage.
 | `accquix-register suppress --restore FILE` | Puts a backup back (`-` reads standard input) and confirms the installation. It only adds |
 | `accquix-register suppress --init-empty` | Confirms a new installation with no objections to restore. Until this or a restore, the API answers `503 reason=setup` |
 | `accquix-register serve` | The read-only HTTP API (see below) |
+| `accquix-register mcp --url URL` | The MCP tools over stdio for a local AI client, forwarding every call to the REST API of the instance at URL with the key from `REGISTER_MCP_KEY` (or `_FILE`). It never connects to the database (D36) |
+| `accquix-register mcp-tools` | Prints the MCP tool list; the committed copy is `api/mcp-tools.json` |
 | `accquix-register openapi` | Prints the OpenAPI 3.1 document; the committed copy is `api/openapi.yaml` |
 | `accquix-register version` | Prints the version |
 
@@ -63,6 +65,9 @@ the list as a warning on every pass, so a loosened check is never in effect unno
 | `REGISTER_API_KEYS` (secret) | — | `name:sha256hex,name2:sha256hex`: hashes of the keys, never the keys. Hash a key with `printf %s "$KEY" \| sha256sum`. Clients send `Authorization: Bearer <key>` |
 | `REGISTER_ALLOW_ANONYMOUS` | `false` | Without keys, `serve` refuses to start unless this is `true`. Anonymous callers are rate-limited per IP; lookup of natural persons without an IČO by DIČ is then unavailable (D26) |
 | `REGISTER_SEARCH_FUZZY` | `true` | Enables `mode=fuzzy`. When `false`, it answers `400 fuzzy_disabled` and `/v1/capabilities` says so |
+| `REGISTER_MCP` | `false` | Serves the read-only MCP adapter at `/mcp` (D36, [mcp.md](mcp.md)): same keys, limits and logging as REST |
+| `REGISTER_MCP_ALLOWED_ORIGINS` | — | Comma-separated browser origins allowed to call `/mcp`; by default every cross-origin browser request is refused |
+| `REGISTER_MCP_KEY` (secret) | — | For `mcp --url`: the API key sent to the instance |
 | `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket per caller, per instance |
 | `REGISTER_FUZZY_EVERY` | `5s` | One fuzzy search per caller per interval (burst 2) |
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches running at once, **per instance**: with several replicas, set a conservative value per replica (D18) |

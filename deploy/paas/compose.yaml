@@ -114,6 +114,8 @@ services:
       REGISTER_API_KEYS: ${REGISTER_API_KEYS:?set REGISTER_API_KEYS}
       REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
       REGISTER_SEARCH_FUZZY: ${REGISTER_SEARCH_FUZZY:-true}
+      # the read-only MCP endpoint /mcp for AI agents (docs: AI agents (MCP)); off by default
+      REGISTER_MCP: ${REGISTER_MCP:-false}
     # The platform's proxy routes the domain to this port; no port is published on the host.
     expose:
       - "8080"

@@ -74,6 +74,11 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// A tool call of the MCP adapter: the /mcp request was already authenticated and charged.
+		if p, ok := r.Context().Value(internalKey{}).(Principal); ok {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+			return
+		}
 		h := r.Header.Get("Authorization")
 		var p Principal
 		switch {
@@ -167,6 +172,10 @@ func (w *statusWriter) WriteHeader(s int) {
 // the identifier in the path or any data (personal-data minimisation).
 func (s *Server) accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Context().Value(internalKey{}) != nil { // logged once, as the /mcp request and its tool line
+			next.ServeHTTP(w, r)
+			return
+		}
 		t0 := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		hold := &Principal{}

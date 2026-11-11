@@ -91,6 +91,8 @@ services:
       REGISTER_API_KEYS_FILE: /run/secrets/api_keys
       REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
       REGISTER_SEARCH_FUZZY: ${REGISTER_SEARCH_FUZZY:-true}
+      # the read-only MCP endpoint /mcp for AI agents (docs: AI agents (MCP)); off by default
+      REGISTER_MCP: ${REGISTER_MCP:-false}
     secrets: [database_url, api_keys]
     ports:
       - "${REGISTER_PUBLISH:-127.0.0.1:8080}:8080"

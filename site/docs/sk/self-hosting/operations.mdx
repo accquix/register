@@ -9,7 +9,7 @@ description: Monitorovanie, zablokované zdroje, námietky, aktualizácie a opä
 | --- | --- |
 | `GET /livez` | Proces beží. |
 | `GET /readyz` | `503`, kým nie sú prvýkrát zverejnené všetky zdroje alebo keď je databáza nedostupná. |
-| `GET /v1/sources` | Pri každom zdroji: `state`, `publishedAsOf`, `stale`, `diagnostic`. |
+| `GET /v1/sources` | Pri každom zdroji: `state`, `publishedAsOf`, `stale`, `diagnostic`, `skippedItems`. |
 
 Upozornenie nastavte, keď:
 

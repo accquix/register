@@ -61,10 +61,17 @@ type Config struct {
 	FSSkipMinRows bool
 
 	// serve
-	Listen          string        // REGISTER_LISTEN, ":8080"
-	APIKeys         string        // REGISTER_API_KEYS (secret): "name:sha256hex,name2:sha256hex"
-	AllowAnonymous  bool          // REGISTER_ALLOW_ANONYMOUS, false
-	SearchFuzzy     bool          // REGISTER_SEARCH_FUZZY, true
+	Listen         string // REGISTER_LISTEN, ":8080"
+	APIKeys        string // REGISTER_API_KEYS (secret): "name:sha256hex,name2:sha256hex"
+	AllowAnonymous bool   // REGISTER_ALLOW_ANONYMOUS, false
+	SearchFuzzy    bool   // REGISTER_SEARCH_FUZZY, true
+	// MCP serves the read-only MCP adapter at /mcp (REGISTER_MCP, false; D36).
+	MCP bool
+	// MCPAllowedOrigins are browser origins allowed to call /mcp (REGISTER_MCP_ALLOWED_ORIGINS,
+	// comma-separated; empty refuses every cross-origin browser request).
+	MCPAllowedOrigins []string
+	// MCPKey is the API key the stdio adapter sends to the instance (REGISTER_MCP_KEY, secret).
+	MCPKey          string
 	RatePerSecond   float64       // REGISTER_RATE_PER_SECOND, 20 (per key, per instance)
 	RateBurst       int           // REGISTER_RATE_BURST, 40
 	FuzzyEvery      time.Duration // REGISTER_FUZZY_EVERY, 5s: one fuzzy search per key per interval (burst 2)
@@ -295,6 +302,17 @@ func (c *Config) loadServe(e Env) error {
 		return err
 	}
 	if c.SearchFuzzy, err = boolVar(e, "REGISTER_SEARCH_FUZZY", true); err != nil {
+		return err
+	}
+	if c.MCP, err = boolVar(e, "REGISTER_MCP", false); err != nil {
+		return err
+	}
+	for _, o := range strings.Split(e.Getenv("REGISTER_MCP_ALLOWED_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			c.MCPAllowedOrigins = append(c.MCPAllowedOrigins, o)
+		}
+	}
+	if c.MCPKey, err = e.Secret("REGISTER_MCP_KEY"); err != nil {
 		return err
 	}
 	if v := e.Getenv("REGISTER_RATE_PER_SECOND"); v == "" {
