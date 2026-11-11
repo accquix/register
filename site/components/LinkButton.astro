@@ -10,7 +10,7 @@ const base =
   "inline-flex h-11 items-center gap-2 rounded-blume px-5 font-medium text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 const look =
   variant === "primary"
-    ? "bg-action text-action-foreground hover:opacity-90"
+    ? "bg-action hover:opacity-90"
     : "border border-border bg-background text-foreground hover:bg-muted";
 ---
-<a class:list={["not-prose", base, look]} style="text-decoration: none" href={href} {...(external ? { rel: "noreferrer", target: "_blank" } : {})}><slot /></a>
+<a class:list={["not-prose", base, look]} style={variant === "primary" ? "text-decoration: none; color: var(--blume-action-foreground)" : "text-decoration: none"} href={href} {...(external ? { rel: "noreferrer", target: "_blank" } : {})}><slot /></a>
