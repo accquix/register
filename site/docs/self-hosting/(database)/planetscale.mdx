@@ -1,0 +1,66 @@
+---
+title: PlanetScale Postgres
+description: "Run the register on PlanetScale Postgres: the role, pg_strict, connection strings, sizes measured on the real data, and online resizing."
+---
+
+<Callout type="note">
+Tested on 11 November 2026 with the real data, on single-node clusters in Frankfurt with PostgreSQL 18.6: the full
+first run, daily passes, search, lookup, MCP, online resizing and load up to 140 requests a second.
+</Callout>
+
+## Setup
+
+1. **Create the database:** PostgreSQL 18, single node or high availability. Choose the region of your API.
+2. **Create a role** that inherits `postgres`: `migrate` creates tables and the `pg_trgm` extension. Add
+   `pg_read_all_stats` if you want statement statistics. To split the roles by job, use the [roles](/self-hosting/database#roles) of the Database page.
+3. **Turn on `pg_strict`** in the extension settings and set `require_where_on_update` and
+   `require_where_on_delete` to `on`. The register runs with both on: it never writes without `WHERE`.
+4. **Connection strings:** port **5432** (direct) for `sync`, `migrate` and the operator, port **6432**
+   (PgBouncer) with the same credentials for `serve`. Keep `sslmode=verify-full&sslrootcert=system`, and add
+   `pool_max_conns` for the API (see [the API connection pool](/self-hosting/database#the-api-connection-pool)). The small sizes allow 25 connections.
+5. **Statement statistics** (`pg_stat_statements`) are not loaded by default; turn them on in the extension
+   settings if you need them.
+
+## Sizes
+
+| Size | vCPU, RAM | Measured limit, default search | Plan for | First run |
+| --- | --- | --- | --- | --- |
+| PS‑5 | 1/16, 512 MB | 30 a second for 5 minutes, but CPU and memory at 100 % already at 10 a second | trying it out, very light use; not production | 15 minutes, under load |
+| PS‑10 | 1/8, 1 GB | about 85 a second; 60 a second for 10 minutes at full CPU | up to about 30 a second | — |
+| PS‑20 | 1/4, 2 GB | about 100–110 a second | up to about 50 a second | 7 minutes |
+
+<Callout type="warning">
+**PS-5 is for trying the register and for very light use, not for production.** Its CPU and memory were at 100 %
+already at 10 searches a second, which leaves no room for a burst of traffic or the monthly reconcile. The minimum
+for production is **PS-10**.
+</Callout>
+
+## What to expect
+
+- **Latency:** the API in the test was about 20 ms from the database, and a search took about 150 ms (p50), most of
+  it network. With the API in the database's region, expect much less.
+- **Lookup by IČO** is cheaper: 140 a second on both sizes. **Fuzzy search** answered in 280–420 ms (p95).
+- **Resizing is online,** without a new database. From PS-10 to PS-5, a client querying every 2–3 seconds saw no
+  error; one search took 2 seconds at the switch. Use high availability when even that pause matters.
+- **A heavy sync slows search on a small cluster.** On PS-5, during a full first run into a second database while
+  search ran at 10 a second, search p95 rose to 0.7–2.8 s and 0.4 % of searches timed out. A monthly reconcile
+  writes far less; on a production size there is room for it.
+- **Database size** after the first run: 2.2 GB, well inside the 10 GB included.
+
+## Lessons from the test
+
+<Panel title="How we tested">
+The production image ran on a laptop in Central Europe, about 20 ms from the database per round trip, with
+`pool_max_conns=20`. The load was open loop: requests were sent at a fixed rate whatever the latency, in steps of 60
+seconds, then for 10 minutes without a break. The queries were built from 400 active subjects sampled from the
+database: full names, single words, prefixes and IČOs. The cluster size was changed online between runs. The method,
+every step and the raw numbers are in `docs/managed-postgres-results.md` in the repository.
+</Panel>
+
+<Panel title="What we learned">
+**The connection pool can be the limit, not the database.** With a pool of 4 (the default of the time) the API stopped at about 27 searches a second while the database CPU sat at 25–50 %, and under more load it nearly stopped answering. Since then the pool defaults to 10 and an overloaded instance refuses the excess at once with `503 overloaded`. Set `pool_max_conns` so that the database, not the pool, runs out first.
+
+**Short tests flatter small sizes.** Small clusters can borrow CPU for a while: one-minute steps looked almost the same on every size, and only the 10-minute runs and the CPU graph showed where each size really ends.
+
+**Watch the CPU graph, not only the latency.** On the smallest size, latency stayed fine while the CPU and memory were already at 100 %, which leaves no room for the monthly reconcile or a burst of traffic.
+</Panel>

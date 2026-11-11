@@ -1,0 +1,41 @@
+---
+title: VAT status
+description: What the VAT section says, why §7 and §7a subjects are not VAT payers, and how to word it on documents.
+seo:
+  title: Slovak VAT payer status, §7 and §7a
+---
+
+The `vat` section comes from the Financial Administration list of subjects registered for VAT (`ds_dphs`).
+
+| Field | Meaning |
+| --- | --- |
+| `icDph` | The IČ DPH. VAT group members (§4b) share one. |
+| `paragraph` | `§4`, `§4b`, `§5`, `§7` or `§7a`: the kind of registration. |
+| `payer` | `true` for §4, §4b and §5; `false` for §7 and §7a; `false` when the fresh list has no row; `null` when unknown. |
+| `registeredOn` | The registration date. |
+| `payerFrom` | The date the subject became a VAT payer. **Always `null` for §7 and §7a.** |
+| `typeChangedOn` | When the kind of registration last changed, if it did. |
+
+## §7 and §7a are registered, but not VAT payers
+
+Subjects registered under §7 (acquisition of goods from another member state) or §7a (cross-border services) are
+registered for VAT, but are **not** VAT payers. The Financial Administration list gives them no "payer from" date at
+all: in the real data, `PLAT_DPH_OD` is empty for every one of them.
+
+:::warning[On invoices]
+Print "platiteľ DPH od …" only when `vat.payer` is `true`. For §7 and §7a, the subject has an IČ DPH, but it is not
+a VAT payer.
+:::
+
+## What the register does not say
+
+- **No cancellation date.** A deregistered payer simply disappears from the list. The register marks the row absent
+  with the date it noticed, which is an observation, not a legal date.
+- **No validity for other EU countries.** Query VIES yourself; its terms forbid mirroring it.
+- **The list is a day behind at most.** Print "according to the Financial Administration list of `asOf`".
+
+## Risk lists
+
+The `risk` section gathers the reliability index (`ds_iz_ran`: vysoko spoľahlivý, spoľahlivý, menej spoľahlivý)
+and entries on the lists of VAT payers with grounds for cancellation (`ds_dphz`), removals from that list
+(`ds_dphv`) and the special scheme (`ds_dpho`).

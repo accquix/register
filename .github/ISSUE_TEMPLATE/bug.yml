@@ -1,0 +1,29 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do **not** paste personal data (names of people, their identifiers or addresses).
+        Describe the case with fictional values, or with a company's public identifiers if needed.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Commands, requests (without API keys), configuration (without secrets).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `accquix-register version`
+  - type: textarea
+    id: sources
+    attributes:
+      label: Output of GET /v1/sources (if relevant)

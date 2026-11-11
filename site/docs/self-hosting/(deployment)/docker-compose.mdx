@@ -1,0 +1,100 @@
+---
+title: Docker compose
+description: "The reference Docker compose deployment: its services and database roles, secrets, settings, common tasks and installing from a release."
+---
+
+`deploy/compose/compose.yaml` is the reference deployment:
+
+| Service | Runs | Lifecycle |
+| --- | --- | --- |
+| `postgres` | PostgreSQL 18 | Long-running, with a health check |
+| `migrate` | `accquix-register migrate` | Runs once after PostgreSQL is healthy, exits 0 |
+| `sync` | `accquix-register sync --every 1h` | Long-running; one pass an hour |
+| `serve` | `accquix-register serve` | Long-running; the API on port 8080 |
+
+`sync` and `serve` start only after `migrate` succeeded. The API becomes ready when the first sync has published
+every source **and** you confirmed the objections of the installation: `suppress --init-empty` on a new one,
+`suppress --restore` on a rebuilt one (see [Database](/self-hosting/database#back-up-the-objections)).
+
+## From a release
+
+Every release has `accquix-register-deploy_<version>.tar.gz` with this deployment, the
+[PaaS variant](/self-hosting/paas) and the [demo](/quickstart#try-the-demo), each pinned to the image of that
+version. You do not need the source code:
+
+```sh
+curl -fsSLO https://github.com/accquix/register/releases/download/v<version>/accquix-register-deploy_<version>.tar.gz
+tar -xzf accquix-register-deploy_<version>.tar.gz && cd accquix-register-deploy_<version>/compose
+./make-secrets.sh && docker compose up -d
+```
+
+Check the archive against `checksums.txt` of the same release. To upgrade, unpack the new version's archive next to
+the old one, copy your `secrets/` directory into it, and run `docker compose up -d` from the new directory: `migrate` runs
+first.
+
+## Secrets
+
+There are no default credentials. `make-secrets.sh` creates the files in `secrets/`. Each process has its own
+database role and gets only its own secret: `migrate` owns the schema, `sync` writes the mirror, `operator` changes
+the objections, `serve` can only read the published data. The roles are created when PostgreSQL first starts; no
+register process connects as the superuser.
+
+<FileTree>
+- deploy/compose/
+  - compose.yaml
+  - make-secrets.sh
+  - secrets/
+    - postgres_password (the superuser: for you, never for the register)
+    - migrate_password, sync_password, operator_password, api_password
+    - migrate_database_url
+    - sync_database_url
+    - operator_database_url
+    - database_url (the API role)
+    - api_keys
+</FileTree>
+
+The directory is private (mode 0700) and the files inside are readable (0644). Compose mounts them as they are, and
+the containers do not run as your user: the register runs as uid 65532. If you write the files yourself, keep the
+same modes, or the register fails with `permission denied` on `/run/secrets/...`.
+
+## Settings
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REGISTER_PUBLISH` | `127.0.0.1:8080` | Where the API is published on the host. Use `0.0.0.0:8080` only behind your own TLS proxy. |
+| `REGISTER_SYNC_EVERY` | `1h` | Interval between sync passes (at least `1m`). |
+| `REGISTER_SEARCH_FUZZY` | `true` | Fuzzy search on or off. |
+| `REGISTER_MCP` | `false` | The MCP endpoint for AI agents on or off. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+| `REGISTER_IMAGE` | `accquix-register:local` | Use a released image instead of building from source. |
+
+Every other variable is in [Configuration](/self-hosting/configuration).
+
+## Common tasks
+
+```sh
+docker compose logs -f sync                       # watch the sync
+docker compose exec serve accquix-register version
+docker compose run --rm sync sync --source fs     # one extra pass of the FS lists
+docker compose down                               # stop; data stays in the pgdata volume
+docker compose run --rm operator suppress --init-empty             # once, on a new installation
+docker compose run --rm operator suppress --subject 99900004 --reason "ticket 123"
+docker compose run --rm operator suppress --list
+docker compose run --rm -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv
+docker compose down -v                            # stop and delete the data: export the objections first
+```
+
+`operator` is not started by `docker compose up`; it runs one `suppress` command and exits. The backup directory
+must be writable by uid 65532.
+
+## Upgrading from the single-role layout
+
+A deployment made before the roles were separated used one superuser for every process. To move it, keeping the
+data, the objections and the API keys:
+
+```sh
+docker compose down            # keeps the pgdata volume
+./make-secrets.sh --upgrade    # adds the new secret files; sets the old superuser URL aside
+./upgrade-roles.sh             # creates the roles and hands the database to register_migrate
+docker compose up -d
+```

@@ -1,0 +1,88 @@
+---
+title: Coolify, Dokploy and similar
+sidebar:
+  label: Coolify and Dokploy
+description: Deploy on a platform that runs Docker Compose from a Git repository, with every secret in the platform's environment settings.
+---
+
+Platforms such as Coolify, Dokploy or Portainer stacks run a Docker Compose file from a Git repository and keep the
+secrets in their own settings screen. They cannot run `make-secrets.sh`, so the reference
+[docker compose](/self-hosting/docker-compose) setup, which reads secret files, does not fit them.
+`deploy/paas/compose.yaml` is the same stack configured only through environment variables.
+
+It is a good fit when you already run a server for something else: the register adds about 2.5 GB of disk, a busy
+first sync of about 15 minutes, and very little afterwards.
+
+| Service | Runs | Lifecycle |
+| --- | --- | --- |
+| `postgres` | PostgreSQL 18 | Always on, with a health check |
+| `roles` | Creates or updates the four database roles | Once per deployment, as the superuser |
+| `migrate` | `accquix-register migrate` | Once per deployment |
+| `setup` | One operator command from `REGISTER_SETUP_COMMAND` | Once per deployment; `version` by default |
+| `sync` | `accquix-register sync --every 1h` | Always on |
+| `serve` | `accquix-register serve` on port 8080 | Always on, behind the platform's proxy |
+
+## Steps
+
+<Steps>
+  <Step title="Add the resource">
+    Create a Docker Compose resource from the repository (or your fork), with the compose file
+    `deploy/paas/compose.yaml`. The image is built from the source; set `REGISTER_IMAGE` to a released image once
+    there is one.
+  </Step>
+  <Step title="Set the variables">
+    Copy the names from `deploy/paas/.env.example` into the platform's environment settings:
+
+    ```sh
+    openssl rand -hex 32      # one value for each of the five passwords
+    key=$(openssl rand -hex 24); echo "API key: $key"
+    printf 'default:%s\n' "$(printf %s "$key" | shasum -a 256 | cut -d' ' -f1)"   # REGISTER_API_KEYS
+    ```
+
+    | Variable | Value |
+    | --- | --- |
+    | `POSTGRES_PASSWORD` | The superuser; only the `roles` service uses it |
+    | `REGISTER_MIGRATE_PASSWORD`, `REGISTER_SYNC_PASSWORD`, `REGISTER_OPERATOR_PASSWORD`, `REGISTER_API_PASSWORD` | One per role |
+    | `REGISTER_API_KEYS` | `name:sha256hex`, the hash of each API key; store the key itself elsewhere |
+    | `REGISTER_SETUP_COMMAND` | `suppress --init-empty`, for the first deployment only |
+
+    Use hex values: the passwords go into connection URLs as they are.
+  </Step>
+  <Step title="Route the domain">
+    Point a domain at the `serve` service, port `8080`, with TLS from the platform. Nothing is published on the
+    host's ports.
+  </Step>
+  <Step title="Deploy, then remove the setup command">
+    The first deployment confirms that this is a new installation with no objections to restore; until then the API
+    answers `503 reason=setup`. **Then delete `REGISTER_SETUP_COMMAND`.** Left in place, it would fail harmlessly
+    on the next deployment, but after a rebuilt database it would confirm "no objections" without anyone checking.
+  </Step>
+  <Step title="Wait for the first sync">
+    `GET /readyz` answers `ready` when every source is published, after about 15 minutes.
+  </Step>
+</Steps>
+
+## Operator commands
+
+`REGISTER_SETUP_COMMAND` runs any `accquix-register` command once with the operator role, but its output lands in
+the platform's logs, where an objection's identifier does not belong. Use it for `suppress --init-empty` only.
+Run objections and their backups from the server's shell, on the project's Docker network (the platform shows its
+name), with the operator password:
+
+```sh
+mkdir -p backup && chmod 777 backup     # the image runs as uid 65532
+docker run --rm --network <project network> -v "$PWD/backup:/backup" \
+  -e REGISTER_OPERATOR_DATABASE_URL="postgres://register_operator:<password>@postgres:5432/register?sslmode=disable" \
+  <image> suppress --export --output /backup/objections.tsv --overwrite
+```
+
+The same form runs `suppress --subject …`, `--undo` or `--restore /backup/objections.tsv`. See
+[Operations](/self-hosting/operations) for what each does. The image has no shell, so `docker exec … sh` does not
+work.
+
+## Sharing an existing PostgreSQL
+
+To use a PostgreSQL that already runs on the server instead of the `postgres` service, create a separate
+database and the roles from [Database](/self-hosting/database#roles), and point the four URLs at it with the
+variables of [Configuration](/self-hosting/configuration). Keep the sync on a direct connection, never through
+PgBouncer.

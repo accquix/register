@@ -1,0 +1,21 @@
+---
+title: Development preview
+type: changelog
+date: 2026-11-10
+description: The first working version, before any release. Not for production use yet.
+changelog:
+  category: Preview
+---
+
+The first version that syncs the real sources and serves the API. There is no release, image or stable contract
+yet: everything here may still change before v1.0.
+
+- **Sync** of the Register of Legal Entities (snapshot and daily files) and six Financial Administration lists,
+  with validation thresholds that block a suspicious update instead of publishing it.
+- **Search**: one box for a name, IČO, DIČ or IČ DPH, with an adaptive default mode and an optional fuzzy mode.
+- **Lookup** by IČO, DIČ or IČ DPH, with <State is="present" />, <State is="absent" /> and
+  <State is="unknown" /> per section, as-of dates and content versions; batch lookup for change detection.
+- **Self-hosting** with docker compose: separate database roles for migrate, sync and the API.
+- **Objections**: a subject can be kept out of name search, with a backup and restore of the list.
+
+Before the first production use, the remaining checks are listed in the project's open questions.

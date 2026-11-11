@@ -21,3 +21,8 @@
 *.test
 *.out
 coverage.*
+
+# Compose secrets: never committed
+deploy/compose/secrets/
+/dist-extra/
+.wrangler/

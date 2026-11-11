@@ -1,0 +1,100 @@
+---
+title: Docker compose
+description: "Referenčné nasadenie cez Docker compose: služby a databázové roly, tajomstvá, nastavenia, bežné úlohy a inštalácia z vydania."
+---
+
+`deploy/compose/compose.yaml` je referenčné nasadenie:
+
+| Služba | Spúšťa | Životný cyklus |
+| --- | --- | --- |
+| `postgres` | PostgreSQL 18 | Beží trvalo, s kontrolou zdravia |
+| `migrate` | `accquix-register migrate` | Spustí sa raz po tom, čo je PostgreSQL pripravený, skončí s kódom 0 |
+| `sync` | `accquix-register sync --every 1h` | Beží trvalo; jeden prechod za hodinu |
+| `serve` | `accquix-register serve` | Beží trvalo; API na porte 8080 |
+
+`sync` a `serve` sa spustia až po úspešnom `migrate`.
+API je pripravené, keď prvá synchronizácia zverejní všetky zdroje **a** potvrdíte námietky inštalácie:
+`suppress --init-empty` na novej, `suppress --restore` na znova zostavenej (pozrite
+[Databáza](/sk/self-hosting/database)).
+
+## Z vydania
+
+Každé vydanie obsahuje `accquix-register-deploy_<verzia>.tar.gz` s týmto nasadením, [variantom pre
+PaaS](/sk/self-hosting/paas) a [demom](/sk/quickstart#vyskúšajte-demo), každé s obrazom danej verzie. Zdrojový kód
+nepotrebujete:
+
+```sh
+curl -fsSLO https://github.com/accquix/register/releases/download/v<verzia>/accquix-register-deploy_<verzia>.tar.gz
+tar -xzf accquix-register-deploy_<verzia>.tar.gz && cd accquix-register-deploy_<verzia>/compose
+./make-secrets.sh && docker compose up -d
+```
+
+Archív overte podľa `checksums.txt` toho istého vydania. Pri aktualizácii rozbaľte archív novej verzie vedľa starého,
+skopírujte do neho adresár `secrets/` a spustite `docker compose up -d` z nového adresára: najprv sa spustí `migrate`.
+
+## Tajomstvá
+
+Žiadne predvolené prihlasovacie údaje neexistujú. `make-secrets.sh` vytvorí súbory v `secrets/`. Každý proces má
+vlastnú databázovú rolu a dostane len svoje tajomstvo: `migrate` vlastní schému, `sync` zapisuje zrkadlo, `operator`
+mení námietky, `serve` môže len čítať zverejnené dáta. Roly sa vytvoria pri prvom štarte PostgreSQL; žiadny proces
+registra sa nepripája ako superpoužívateľ.
+
+<FileTree>
+- deploy/compose/
+  - compose.yaml
+  - make-secrets.sh
+  - secrets/
+    - postgres_password (superpoužívateľ: pre vás, nikdy pre register)
+    - migrate_password, sync_password, operator_password, api_password
+    - migrate_database_url
+    - sync_database_url
+    - operator_database_url
+    - database_url (rola API)
+    - api_keys
+</FileTree>
+
+Priečinok je súkromný (práva 0700) a súbory v ňom sú čitateľné (0644). Compose ich pripojí tak, ako sú, a kontajnery
+nebežia pod vaším používateľom: register beží ako uid 65532. Ak súbory zapisujete sami, nastavte rovnaké práva, inak
+register skončí s `permission denied` na `/run/secrets/...`.
+
+## Nastavenia
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_PUBLISH` | `127.0.0.1:8080` | Kde sa API zverejní na hostiteľovi. `0.0.0.0:8080` použite len za vlastným TLS proxy. |
+| `REGISTER_SYNC_EVERY` | `1h` | Interval medzi prechodmi synchronizácie (najmenej `1m`). |
+| `REGISTER_SEARCH_FUZZY` | `true` | Približné vyhľadávanie zapnuté alebo vypnuté. |
+| `REGISTER_MCP` | `false` | MCP endpoint pre AI agentov zapnutý alebo vypnutý. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn` alebo `error`. |
+| `REGISTER_IMAGE` | `accquix-register:local` | Použiť vydaný obraz namiesto zostavenia zo zdrojového kódu. |
+
+Ostatné premenné sú v [Konfigurácii](/sk/self-hosting/configuration).
+
+## Bežné úlohy
+
+```sh
+docker compose logs -f sync                       # sledovať synchronizáciu
+docker compose exec serve accquix-register version
+docker compose run --rm sync sync --source fs     # jeden prechod navyše pre zoznamy FS
+docker compose down                               # zastaviť; dáta zostanú vo zväzku pgdata
+docker compose run --rm operator suppress --init-empty             # raz, na novej inštalácii
+docker compose run --rm operator suppress --subject 99900004 --reason "tiket 123"
+docker compose run --rm operator suppress --list
+docker compose run --rm -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv
+docker compose down -v                            # zastaviť a zmazať dáta: najprv exportujte námietky
+```
+
+`operator` sa príkazom `docker compose up` nespúšťa; vykoná jeden príkaz `suppress` a skončí. Priečinok na zálohu
+musí byť zapisovateľný pre uid 65532.
+
+## Prechod zo schémy s jednou rolou
+
+Nasadenie vytvorené pred oddelením rolí používalo pre každý proces jedného superpoužívateľa. Prechod so zachovaním
+dát, námietok a API kľúčov:
+
+```sh
+docker compose down            # zväzok pgdata zostane
+./make-secrets.sh --upgrade    # pridá nové súbory s tajomstvami; starú URL superpoužívateľa odloží
+./upgrade-roles.sh             # vytvorí roly a odovzdá databázu role register_migrate
+docker compose up -d
+```

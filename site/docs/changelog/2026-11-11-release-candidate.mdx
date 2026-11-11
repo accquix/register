@@ -1,0 +1,26 @@
+---
+title: Release candidate 1.0.0-rc.1
+type: changelog
+date: 2026-11-11
+draft: true
+description: "The first release candidate of Accquix Register: demo mode, overload protection, tests on managed PostgreSQL, AI agents. Contracts frozen for 1.0.0."
+changelog:
+  category: Release candidate
+---
+
+The first release with an image and a frozen contract. Between this candidate and 1.0.0, the API, the MCP tools,
+the command line and the configuration change only to fix a defect. See [Versions and stability](/api/stability).
+
+- **Demo mode**: the real API over 180 fictional subjects in seconds, with nothing to download.
+  See [Try the demo](/quickstart#try-the-demo).
+- **Overload protection**: an instance at its capacity keeps answering and refuses the excess at once with `503`
+  and `reason: overloaded`. The API's connection pool now defaults to 10 connections.
+- **Tested on managed PostgreSQL**: compatibility and capacity on PlanetScale Postgres with the real data. See
+  [PlanetScale Postgres](/self-hosting/planetscale).
+- **AI agents**: the read-only MCP endpoint, and copyable prompts for running and integrating the register.
+- **Full addresses** on every search result, by name or by identifier.
+- **Safer operations**: `serve` refuses to start on an outdated schema; list items without any identifier are left
+  out and counted instead of blocking a list.
+
+The last check before 1.0.0 is the first monthly reconcile against a new RPO snapshot, around 5 December 2026.
+The full list is in `CHANGELOG.md` in the repository.

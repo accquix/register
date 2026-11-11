@@ -1,0 +1,56 @@
+# Accquix Register demo: the real API over FICTIONAL subjects, ready in about half a minute (D41).
+#
+#   docker compose -f deploy/demo/compose.yaml up -d --wait serve   then  curl 'localhost:8080/v1/search?q=zlata'
+#
+# Not register data: every answer says so in its attribution, and /v1/capabilities reports
+# "demo": true. The database lives in memory and is gone with `docker compose down`.
+#
+# This is its own compose project with no volumes, so it can never share a database with a real
+# installation, and the sync refuses a demo database anyway. PostgreSQL is not published and the
+# API listens on localhost only, which is why it can do without secrets and API keys. Never
+# expose it.
+name: accquix-register-demo
+
+x-register: &register
+  image: ${REGISTER_IMAGE:-accquix-register:local}
+  build:
+    context: ../..
+    args:
+      VERSION: ${REGISTER_VERSION:-dev}
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: register
+      POSTGRES_PASSWORD: demo # reachable only inside this project's network; the data are fictional
+    tmpfs:
+      - /var/lib/postgresql:size=512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d register"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # migrates, loads the fictional subjects, marks the database as a demo, then exits
+  demo:
+    <<: *register
+    command: ["demo"]
+    environment:
+      REGISTER_DATABASE_URL: postgres://postgres:demo@postgres:5432/register?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  serve:
+    <<: *register
+    command: ["serve"]
+    environment:
+      REGISTER_DATABASE_URL: postgres://postgres:demo@postgres:5432/register?sslmode=disable
+      REGISTER_ALLOW_ANONYMOUS: "true"
+      REGISTER_MCP: "true"
+    ports:
+      - "${REGISTER_DEMO_PUBLISH:-127.0.0.1:8080}:8080"
+    depends_on:
+      demo:
+        condition: service_completed_successfully

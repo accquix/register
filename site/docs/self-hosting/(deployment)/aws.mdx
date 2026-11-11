@@ -1,0 +1,100 @@
+---
+title: AWS
+description: A reference layout on ECS Fargate with RDS for PostgreSQL, and the pitfalls specific to AWS.
+---
+
+This page describes the pieces and their settings, not a ready-made template: every AWS account has its own network,
+naming and tooling. Translate it into Terraform, CloudFormation, CDK or the console as you prefer.
+
+## Layout
+
+| Part | AWS service | Settings |
+| --- | --- | --- |
+| Database | RDS for PostgreSQL 16–18, or an external provider | `db.t4g.small` or larger, 20 GB gp3. The data takes about 2.3 GB. |
+| `serve` | ECS service on Fargate behind an Application Load Balancer | 0.25 vCPU, 0.5 GB, one or more tasks. |
+| `sync` | ECS task on Fargate, started by EventBridge Scheduler | 0.5 vCPU, 1 GB, schedule `rate(1 hour)`. |
+| `migrate` | The same task definition as `sync`, run once per release | Command `migrate`, with the migrate role. |
+| Secrets | Secrets Manager | One secret per database role, plus the API key hashes. |
+| Logs | CloudWatch Logs (`awslogs`) | The logs hold no names, queries or identifiers. |
+
+Instead of the scheduled task, `sync` can run as an ECS service with one task and the command `sync --every 1h`.
+Both are correct; the scheduled task costs nothing between runs.
+
+## Steps
+
+<Steps>
+  <Step title="Database">
+    Create the instance in private subnets. `pg_trgm` is available on RDS without any parameter change. Connect as
+    the master user once and create the three roles from [Database](/self-hosting/database#roles). On RDS the master
+    user can do this: it does not need to be a true superuser.
+  </Step>
+  <Step title="Secrets">
+    Store `REGISTER_MIGRATE_DATABASE_URL`, `REGISTER_SYNC_DATABASE_URL`, `REGISTER_DATABASE_URL` and
+    `REGISTER_API_KEYS` in Secrets Manager. Give each task definition only the secret its command needs, through the
+    container's `secrets` field; the task execution role needs `secretsmanager:GetSecretValue` on those secrets only.
+  </Step>
+  <Step title="Migrate">
+    Run a one-off task with the command `migrate` and the migrate secret, and wait for exit code 0.
+  </Step>
+  <Step title="Sync">
+    Create the schedule. The first run downloads the full RPO snapshot and takes about 15 minutes; later runs take
+    seconds to a few minutes. An overlapping start exits at once, so a long first run never collides with the next
+    one.
+  </Step>
+  <Step title="Serve">
+    Create the service and the load balancer, with TLS on the listener. The API answers `503` until the first sync
+    has published every source.
+  </Step>
+</Steps>
+
+## Container definitions
+
+The relevant parts, with placeholders in angle brackets:
+
+```json
+{
+  "name": "sync",
+  "image": "<image>",
+  "command": ["sync"],
+  "secrets": [
+    { "name": "REGISTER_SYNC_DATABASE_URL", "valueFrom": "<sync secret ARN>" }
+  ],
+  "environment": [
+    { "name": "REGISTER_WORK_DIR", "value": "/tmp/accquix-register" }
+  ],
+  "logConfiguration": { "logDriver": "awslogs", "options": { "awslogs-group": "<group>", "awslogs-region": "<region>", "awslogs-stream-prefix": "sync" } }
+}
+```
+
+```json
+{
+  "name": "serve",
+  "image": "<image>",
+  "command": ["serve"],
+  "portMappings": [{ "containerPort": 8080 }],
+  "secrets": [
+    { "name": "REGISTER_DATABASE_URL", "valueFrom": "<api secret ARN>" },
+    { "name": "REGISTER_API_KEYS", "valueFrom": "<api keys secret ARN>" }
+  ]
+}
+```
+
+## Pitfalls
+
+| Pitfall | What to do |
+| --- | --- |
+| **Load balancer health check on `/readyz`.** `/readyz` is `503` until the first sync has finished, so the target group marks every task unhealthy and ECS replaces them in a loop. | Use **`/livez`** for the target group health check. Watch `/readyz` and `/v1/sources` in your monitoring instead. |
+| **Container health check.** The image is distroless: it has no shell and no `curl`, so a `CMD-SHELL` health check always fails. | Leave the container health check out and rely on the load balancer. |
+| **RDS Proxy for `sync`.** The proxy pins or breaks the advisory lock and COPY. | Point `REGISTER_SYNC_DATABASE_URL` at the instance endpoint. `serve` may use the proxy. |
+| **`sslmode=verify-full` on RDS.** RDS certificates are signed by the RDS certificate authority, which is not in the image's trust store, so the connection fails. | Build a derived image that adds the [RDS CA bundle](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html) and set `sslrootcert=<path>` in the URL, or use `sslmode=require` inside a private VPC. |
+| **Read-only root file system.** With `readonlyRootFilesystem`, `sync` cannot write its work directory. | Mount a task volume (ephemeral storage is enough) and point `REGISTER_WORK_DIR` at it. |
+| **App Runner or Lambda for `sync`.** Both stop work that is not a request; the first sync runs for about 15 minutes. | Use ECS tasks for `sync`. |
+| **No outbound internet.** Tasks in private subnets without a NAT gateway or a public IP cannot reach the sources. | Add a NAT gateway, or run the tasks in public subnets with a public IP and a strict security group. |
+| **External database with an IP allow list.** Fargate tasks get changing addresses. | Send the traffic through a NAT gateway with an Elastic IP and allow that address. |
+
+## Updates
+
+1. Publish the new image tag.
+2. Run the `migrate` task with the new image and wait for exit code 0.
+3. Update both task definitions to the new image. The next scheduled `sync` uses it; `serve` rolls out through the
+   ECS deployment.

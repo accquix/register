@@ -1,0 +1,13 @@
+---
+// A centred landing section with an optional heading.
+interface Props {
+  title?: string;
+  lead?: string;
+}
+const { title, lead } = Astro.props;
+---
+<section class="mx-auto w-full max-w-5xl px-4 py-6 md:px-6 md:py-8">
+  {title && <h2 style="margin: 0" class="text-balance font-display font-semibold text-2xl text-foreground md:text-3xl">{title}</h2>}
+  {lead && <p style="margin: 0.75rem 0 0" class="max-w-2xl text-pretty text-muted-foreground">{lead}</p>}
+  <div class:list={["register-section-body", title || lead ? "mt-6" : ""]}><slot /></div>
+</section>

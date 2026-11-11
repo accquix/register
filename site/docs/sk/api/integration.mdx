@@ -1,0 +1,65 @@
+---
+title: Integrácia do aplikácie
+description: Kontrolný zoznam na použitie registra vo fakturačnej alebo účtovnej aplikácii.
+---
+
+<Prompt description="Nechajte svojho AI agenta **integrovať** vyhľadávanie a overenie firiem do aplikácie podľa týchto pravidiel." actions={["copy"]}>
+Integruj Accquix Register, API slovenských obchodných registrov na vlastnej infraštruktúre, do tejto aplikácie, aby si používatelia mohli vybrať firmu (odberateľa alebo dodávateľa) vo formulároch, napríklad na faktúrach.
+
+Inštancia beží na `https://register.example.internal` (opýtaj sa ma na skutočnú adresu). Prečítaj si jej kontrakt OpenAPI na `/openapi.json` a limity na `/v1/capabilities` (posielaj `Authorization: Bearer <kľúč>`) a z kontraktu vytvor typového klienta, namiesto hádania polí. API kľúč drž v konfigurácii, nikdy nie v kóde, testoch ani logoch.
+
+Postav to takto:
+
+1. Vyhľadávacie pole volá `GET /v1/search` počas písania: od 2–3 znakov, s oneskorením asi 250–300 ms, a predchádzajúcu požiadavku zruší. Pri každom výsledku ukáž názov, IČO a úplnú adresu, lebo rôzne subjekty môžu mať rovnaký názov.
+2. Výsledok vyhľadávania je kandidát, nie fakt. Keď ho používateľ vyberie, zavolaj `GET /v1/lookup/{ico}` a formulár vyplň len z tejto odpovede.
+3. K uloženej firme si ulož IČO a `source.version` každej časti. Neskôr ju over podľa IČO namiesto nového vyhľadávania a raz denne skontroluj zmeny cez `POST /v1/lookup:batch`.
+
+Pravidlá:
+
+- `503`, časť v stave `unknown` alebo príznak `stale` znamenajú, že údaj nie je známy, nikdy „nenájdené“. Nechaj používateľa pokračovať s údajmi, ktoré potvrdí; doklad nikdy neblokuj.
+- Subjekt ber ako platiteľa DPH len vtedy, keď je `vat.payer` `true`. Subjekty podľa §7 a §7a majú IČ DPH, ale nie sú platiteľmi DPH. Pri údajoch o DPH ukáž dátum aktuálnosti.
+- Jedno IČ DPH môže patriť viacerým subjektom (skupina DPH): nechaj používateľa vybrať.
+- Identifikátory sú presné: IČO, DIČ ani IČ DPH nikdy neporovnávaj ani neopravuj približne.
+- Keď údaje z registra ukazuješ iným ľuďom, ukáž texty `attribution` z odpovede.
+- Pri `429` počkaj podľa `Retry-After`; požiadavky `GET` po chybe spojenia opakuj s narastajúcim odstupom.
+
+Tieto pravidlá pokry testami, ktoré používajú len fiktívne firmy.
+</Prompt>
+
+Postup, ktorý funguje pre aplikáciu, akou je napríklad fakturačný nástroj:
+
+<Steps>
+  <Step title="Vyhľadávanie navrhuje">
+    Výsledky `/v1/search` ukazujte počas písania, s oneskorením. Zobrazte názov, IČO a úplnú adresu: dva subjekty môžu mať
+    rovnaký názov.
+  </Step>
+  <Step title="Rozhoduje len presný identifikátor">
+    Keď používateľ vyberie výsledok, zavolajte `/v1/lookup/{ico}` a použite túto odpoveď. Nikdy sami nevypĺňajte
+    formulár z prvého výsledku vyhľadávania.
+  </Step>
+  <Step title="Uchovávajte verzie">
+    Ku kópii obchodného partnera si uložte `source.version` každej časti.
+  </Step>
+  <Step title="Kontrolujte denne">
+    Raz denne zavolajte `/v1/lookup:batch` s `fields: "versions"` a ukážte používateľovi, čo sa zmenilo. Pozrite
+    [Sledovanie zmien](/sk/api/changes).
+  </Step>
+</Steps>
+
+## Pravidlá, ktoré udržia doklady správne
+
+- **Neznáme nie je „nenájdené“.** `503`, `unknown` a `stale` berte ako „neznáme“. Výpadok registra nesmie
+  zablokovať vystavenie dokladu; nechajte používateľa pokračovať s údajmi, ktoré potvrdí.
+- **Znenie o DPH.** „Platiteľ DPH od …“ uvádzajte iba vtedy, keď je `vat.payer` `true`. Subjekty podľa §7 a §7a majú
+  IČ DPH, ale nie sú platiteľmi DPH. Pozrite [Stav DPH](/sk/concepts/vat).
+- **Zápis v registri sa predvyplní, používateľ ho potvrdí.** `identity.registrations[]` uvádza súd a číslo pre
+  právny údaj dodávateľa. Genitív názvu súdu a presné znenie si zostavíte sami.
+- **Uvádzajte dátum.** „Podľa zoznamu Finančnej správy k 10. 11. 2026“ je presné; „je platiteľ DPH“ bez dátumu nie.
+- **IČ DPH iných štátov EÚ.** Pýtajte sa priamo VIES: register ho nezrkadlí.
+- **Uvedenie zdroja.** Ak dáta ukazujete iným, ukážte aj texty `attribution`, ktoré vyžadujú licencie.
+
+## Opakovanie a výpadky
+
+- Bezpečné požiadavky `GET` po chybe spojenia zopakujte s rastúcim odstupom.
+- Pri `429` rešpektujte `Retry-After`.
+- Pri štarte si prečítajte `/v1/capabilities`: či je približné vyhľadávanie zapnuté a aké sú limity.

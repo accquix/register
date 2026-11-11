@@ -1,0 +1,106 @@
+---
+title: Databáza
+description: Roly, spojenia, spravované PostgreSQL a jediná tabuľka, ktorú musíte zálohovať.
+sidebar:
+  label: Prehľad
+---
+
+## Roly
+
+Oddelené roly držia každý proces pri jeho úlohe. Vytvorte ich ako správca pred `migrate`:
+
+```sql
+CREATE ROLE register_migrate  LOGIN PASSWORD '…';   -- vlastní schému, spúšťa migrate
+CREATE ROLE register_sync     LOGIN PASSWORD '…';   -- sync
+CREATE ROLE register_operator LOGIN PASSWORD '…';   -- suppress (námietky)
+CREATE ROLE register_api      LOGIN PASSWORD '…';   -- serve
+
+ALTER DATABASE register OWNER TO register_migrate;
+GRANT CONNECT ON DATABASE register TO register_sync, register_operator, register_api;
+GRANT TEMPORARY ON DATABASE register TO register_sync, register_operator;
+ALTER ROLE register_api SET default_transaction_read_only = on;
+ALTER ROLE register_api SET statement_timeout = '10s';
+```
+
+Potom spustite `migrate` s názvami rolí. Každej role pridelí presne tie práva na tabuľky, ktoré potrebuje, a to po
+každej migrácii:
+
+```sh
+REGISTER_DB_ROLE_API=register_api REGISTER_DB_ROLE_SYNC=register_sync \
+REGISTER_DB_ROLE_OPERATOR=register_operator accquix-register migrate
+```
+
+| Rola | Môže | Nemôže |
+| --- | --- | --- |
+| API | čítať zrkadlo, vyhľadávaciu vrstvu a to, ktoré kľúče sú vyradené | čítať dôvody ani históriu námietok; čokoľvek zapisovať |
+| sync | zapisovať zrkadlo a vyhľadávaciu vrstvu; čítať námietky | pridať, zmeniť ani odvolať námietku |
+| operátor | pridávať a odvolávať námietky; potvrdiť inštaláciu | zapisovať dáta registra |
+
+Nasadenie cez docker compose to celé urobí za vás, takže žiadny proces registra sa nepripája ako superpoužívateľ.
+Testované sú PostgreSQL 16, 17 a 18.
+
+Potom nasmerujte každý režim na jeho rolu:
+
+| Premenná | Rola | Spojenie |
+| --- | --- | --- |
+| `REGISTER_MIGRATE_DATABASE_URL` | `register_migrate` | Priame |
+| `REGISTER_SYNC_DATABASE_URL` | `register_sync` | **Priame** (advisory lock, COPY, dočasné tabuľky) |
+| `REGISTER_OPERATOR_DATABASE_URL` | `register_operator` | **Priame** |
+| `REGISTER_DATABASE_URL` | `register_api` | Priame alebo transakčný pooler |
+
+Režimu `serve` nikdy nedávajte rolu, ktorá môže zapisovať. Pri spravovaných databázach použite `sslmode=verify-full`.
+
+### Pool spojení API
+
+`serve` otvorí najviac **10** spojení, ak connection string nenastaví `pool_max_conns`. Keď databáza nie je hneď
+vedľa API, limit môže určovať tento pool, nie databáza: jedno vyhľadávanie spustí niekoľko dopytov za sebou, takže pri
+20 ms na jednu cestu tam a späť unesie každé spojenie asi 7 vyhľadávaní za sekundu. Veľkosť nastavte v connection
+stringu, v rámci limitu spojení databázy:
+
+```sh
+REGISTER_DATABASE_URL='postgresql://…@host:6432/register?sslmode=verify-full&pool_max_conns=12'
+```
+
+Inštancia vybavuje naraz najviac toľko dátových požiadaviek, koľko má spojení. Keď je plná, nová požiadavka čaká
+štvrť sekundy a potom dostane `503` s `reason: overloaded` a `Retry-After`, takže prijaté požiadavky si zachovajú
+rýchlosť a nevyprší čas všetkým naraz.
+
+Cez transakčný pooler, napríklad PgBouncer, nedrží každé klientske spojenie vlastné spojenie na serveri: v teste na
+[PlanetScale Postgres](/sk/self-hosting/planetscale) použilo 21 klientskych spojení na serveri najviac 16.
+
+## Spravovaní poskytovatelia
+
+| Poskytovateľ | Poznámky |
+| --- | --- |
+| PlanetScale Postgres | Otestované na reálnych dátach; pozri [PlanetScale Postgres](/sk/self-hosting/planetscale). |
+| Neon | Funguje. Pri pláne Launch nemá databáza zoznam povolených IP, spoliehajte sa na TLS a heslá rolí. |
+| Supabase, RDS, obyčajný PostgreSQL | Fungujú bez úprav. |
+
+## Veľkosť a rast
+
+Asi 2,3 GB dát s indexmi, rastie spolu s registrami (niekoľko percent ročne). Slovník slov pre približné
+vyhľadávanie pridá asi 10 MB.
+
+## Zálohujte námietky
+
+Dáta registra zálohu nepotrebujú: vždy ich možno znova zostaviť z oficiálnych zdrojov. Verzie častí sú odtlačky
+obsahu, takže po opätovnom zostavení vaši klienti uvidia rovnaké verzie a žiadne falošné zmeny.
+
+Námietky sú iné: sú to vaše vlastné dáta a žiadny zdroj ich neobnoví. Ak sa stratia, každá osoba, ktorá podala
+námietku, sa potichu vráti do vyhľadávania podľa názvu. Zmazanie databázy, `docker compose down -v` aj
+`migrate down-to 0` ich zmažú.
+
+```sh
+accquix-register suppress --export --output objections.tsv --overwrite   # po každej zmene a pravidelne
+accquix-register suppress --restore objections.tsv                       # na znova zostavenej databáze
+```
+
+- Export sa zapisuje atomicky, na prepísanie súboru potrebuje `--overwrite` a nikdy ho neprepíše prázdnym exportom.
+  Výstup `suppress --list` nepresmerúvajte do súboru: shell súbor vyprázdni skôr, než sa príkaz spustí.
+- Súbor uchovávajte šifrovaný a mimo databázy: obsahuje zoznam osôb, ktoré podali námietku. Posledný riadok obsahuje
+  počet riadkov a kontrolný súčet, takže obnova odmietne poškodený súbor. Je to kontrola celistvosti, nie pravosti:
+  kto môže súbor zmeniť, môže súčet prepočítať.
+- Po opätovnom zostavení API odpovedá `503` s `reason: setup`, kým nespustíte `suppress --restore`, alebo
+  `suppress --init-empty` na novej inštalácii bez námietok. Prázdna databáza tieto dva prípady nerozlíši, preto
+  register nič neháda.
+- Ak ste stratili databázu aj všetky kópie zálohy, register námietky obnoviť nedokáže.

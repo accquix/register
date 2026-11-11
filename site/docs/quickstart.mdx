@@ -1,0 +1,106 @@
+---
+title: Quick start
+description: Run Accquix Register with docker compose, wait for the first sync, and make your first search and lookup.
+---
+
+You need Docker with the compose plugin, about 10 GB of free disk and outbound HTTPS. The first sync downloads
+about 1 GB and takes 7–20 minutes, mostly downloading.
+
+<Prompt description="Or let your AI agent **run** it locally and check that it works." actions={["copy"]}>
+Run Accquix Register locally with docker compose and check that it works. Do not change the compose files or the database.
+
+1. Check that Docker with the compose plugin is installed, that about 10 GB of disk is free, and that outbound HTTPS works.
+2. Run `git clone https://github.com/accquix/register`, then `./make-secrets.sh` in `register/deploy/compose`. It prints an API key once: tell me to store it, and never write it anywhere else or into logs.
+3. Run `docker compose up -d`. The first sync downloads about 1 GB and takes 7–20 minutes. Until it is done, the API answers `503` with the reason `bootstrapping`: that is expected, not an error.
+4. Check `curl -s localhost:8080/readyz` once a minute until it answers `ready`. If it is not ready after 40 minutes, show me `docker compose logs --tail 50 sync`.
+5. With the key, run one search, `GET /v1/search?q=<a company name>`, and one lookup of a result's IČO, `GET /v1/lookup/<IČO>`. Show me the answers with their `dataAsOf` and `attribution`.
+</Prompt>
+
+## Try the demo
+
+To see the API before you download anything, run the demo: the real API over about 180 fictional companies and sole
+traders, with VAT payers, a VAT group, closed subjects and risk-list entries. Once the image is built, it is ready in
+seconds.
+
+```sh
+git clone https://github.com/accquix/register && cd register
+docker compose -f deploy/demo/compose.yaml up -d --wait serve
+curl -s 'localhost:8080/v1/search?q=zlata'
+```
+
+No API key is needed: the demo listens on localhost only. Every answer says `DEMO DATA` in its `attribution`, and
+`/v1/capabilities` reports `"demo": true`. The database lives in memory and is gone after
+`docker compose -f deploy/demo/compose.yaml down`. The sync refuses a demo database, so demo and real data never mix.
+
+## Run it with the real data
+
+<Steps>
+  <Step title="Get the code">
+    ```sh
+    git clone https://github.com/accquix/register
+    cd register/deploy/compose
+    ```
+  </Step>
+  <Step title="Create the secrets">
+    ```sh
+    ./make-secrets.sh
+    ```
+    This writes a random database password and one API key into `secrets/`. **The API key is printed once:**
+    store it now. Only its SHA-256 hash is kept.
+  </Step>
+  <Step title="Start the stack">
+    ```sh
+    docker compose up -d
+    ```
+    Compose starts PostgreSQL 18, applies the schema (`migrate`), then starts the API (`serve`) and the hourly
+    sync (`sync --every 1h`).
+  </Step>
+  <Step title="Wait for the first sync">
+    ```sh
+    docker compose logs -f sync
+    curl -s localhost:8080/readyz
+    ```
+    Until every source is published, the API answers `503` with the reason `bootstrapping`. When the sync logs
+    `fs list applied` for the last list, `/readyz` answers `ready`.
+  </Step>
+  <Step title="Search and look up">
+    ```sh
+    export KEY=<your key>
+    curl -s -H "Authorization: Bearer $KEY" "localhost:8080/v1/search?q=zlata%20ryb"
+    curl -s -H "Authorization: Bearer $KEY" "localhost:8080/v1/lookup/99900001"
+    ```
+  </Step>
+</Steps>
+
+A search returns candidates; a lookup by identifier returns the full subject:
+
+```json title="GET /v1/search?q=zlata ryb"
+{
+  "mode": "default",
+  "results": [
+    {
+      "ico": "99900001",
+      "name": "Zlatá Rybka, s.r.o.",
+      "municipality": "Fiktívne Mesto",
+      "kind": "legal_person",
+      "active": true
+    }
+  ],
+  "dataAsOf": "2026-11-10",
+  "attribution": [
+    "Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0",
+    "Zdroj údajov: Finančná správa SR"
+  ]
+}
+```
+
+:::tip
+The examples on this site use fictional subjects, such as "Zlatá Rybka, s.r.o." with IČO `99900001`. Your
+instance returns the real register data.
+:::
+
+## Next steps
+
+- [How it works](/concepts/how-it-works): what the sync does and what the answers guarantee.
+- [Using the API](/api/search): search, lookup and change detection.
+- [Self-hosting](/self-hosting/requirements): requirements, database roles, monitoring and upgrades.

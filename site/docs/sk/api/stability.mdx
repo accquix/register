@@ -1,0 +1,42 @@
+---
+title: Verzie a stabilita
+description: Na čo sa vaša integrácia môže spoľahnúť medzi verziami, čo je nekompatibilná zmena a ako sa zmena ohlasuje.
+---
+
+Accquix Register sa riadi [sémantickým verziovaním](https://semver.org). HTTP API má vlastnú hlavnú verziu v ceste:
+všetko na tomto webe je `/v1`. Prípadné `/v2` by bežalo vedľa `/v1`, takže aktualizácia inštancie nikdy nevynúti
+zmenu u jej používateľov.
+
+## Na čo sa môžete spoľahnúť
+
+- **Tvar API** podľa dokumentu OpenAPI (`/openapi.json` na vašej inštancii) a nástrojov MCP.
+- **Význam odpovedí**: `404` len z aktuálnych dát; <State is="unknown" /> nikdy neznamená „nenájdené“; `vat.payer`
+  `true` alebo `false` len z aktuálnych dát; §7 a §7a sú registrované, ale nie sú platiteľmi DPH; verzie častí sa
+  menia, len keď sa zmenia dáta.
+- **Uzavreté hodnoty**, ktoré v rámci `/v1` nikdy nepribudnú: `state` časti, `type` overenia, `kind` subjektu a
+  `mode` vyhľadávania.
+
+## Čo sa môže zmeniť v kompatibilnom vydaní
+
+- Nové endpointy, nové voliteľné parametre a **nové polia v odpovedi**. Polia, ktoré nepoznáte, ignorujte.
+- Nové hodnoty `code` a `reason` v chybách. Neznámy `code` spracujte podľa HTTP stavu a neznámy `reason` ako
+  „momentálne nedostupné“.
+- Poradie a presná množina výsledkov vyhľadávania, keďže sa zlepšuje relevancia. Vyhľadávanie navrhuje; rozhoduje len
+  presný identifikátor.
+- Text `title` a `detail` v chybách a predvolené limity a časové limity. Zmenená predvolená hodnota je v zozname zmien.
+
+## Ako sa ohlasuje odstránenie
+
+1. Pole alebo endpoint sa v dokumente OpenAPI označí ako `deprecated`, API posiela hlavičky `Deprecation` a
+   `Sunset` a zoznam zmien uvedie náhradu.
+2. Funguje ešte aspoň **6 mesiacov** a do ďalšej hlavnej verzie.
+3. Odstráni sa len v hlavnej verzii.
+
+Bezpečnostná oprava môže zmenu vyžadovať skôr; potom to uvedie zoznam zmien a bezpečnostné upozornenie.
+
+## Kandidáti na vydanie
+
+Kandidát na vydanie, napríklad `1.0.0-rc.1`, zmrazí kontrakt pripravovaného vydania. Medzi kandidátom a vydaním sa
+kontrakt mení len kvôli oprave chyby a zoznam zmien to uvedie.
+
+Celá politika vrátane príkazového riadku, konfigurácie a formátu zálohy je v `docs/stability.md` v repozitári.

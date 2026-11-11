@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+docs
+deploy/compose/secrets
+dist
+bin
+*.md
+!README.md
+site

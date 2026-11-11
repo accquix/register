@@ -1,6 +1,6 @@
 # Measurement spike (OQ-2)
 
-**Status: not approved yet.** The spike is throw-away measurement code, not the build. It runs
+**Status: done 2026-11-10.** Results: [spike-results.md](spike-results.md). The spike is throw-away measurement code, not the build. It runs
 locally and costs nothing.
 
 **Goal:** replace the estimates with measured numbers before choosing the database size and before

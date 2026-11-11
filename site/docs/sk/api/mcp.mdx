@@ -1,0 +1,104 @@
+---
+title: AI agenti (MCP)
+description: Pripojte Claude, Cursor a iných MCP klientov k vlastnej inštancii cez MCP endpoint len na čítanie, s rovnakými kľúčmi, limitmi a pravidlami ako REST API.
+---
+
+Vaša inštancia môže sprístupniť [Model Context Protocol](https://modelcontextprotocol.io), aby AI agent sám
+vyhľadával a overoval slovenské firmy. Je **predvolene vypnutý** a **len na čítanie**. Každé volanie nástroja ide cez
+REST API v tom istom procese, takže agent dostane presne to, čo program, s tým istým API kľúčom, limitom a pravidlami
+logovania.
+
+Neexistuje centrálny server: vaši agenti komunikujú s vašou inštanciou a k správcom Accquix sa nič nedostane. Pre
+agenta, ktorého si stavate sami, je zvyčajne jednoduchšie volať [REST API](/sk/api/search) s vlastnými definíciami
+nástrojov; MCP je pre agentov, ktorých nestavate, napríklad Claude Desktop, Claude Code alebo Cursor.
+
+## Zapnutie
+
+```sh
+REGISTER_MCP=true    # /mcp vedľa /v1
+```
+
+`GET /v1/capabilities` potom uvádza `"mcp": { "enabled": true, "path": "/mcp" }`. Endpoint používa Streamable HTTP
+bez relácií: `POST /mcp`, jedna JSON odpoveď na požiadavku.
+
+## Nástroje
+
+| Nástroj | Robí | To isté ako |
+| --- | --- | --- |
+| `search_subjects` | Kandidáti pre názov, IČO, DIČ alebo IČ DPH; `mode` `fuzzy` len ak je zapnutý | `GET /v1/search` |
+| `lookup_subject` | Subjekt s časťami, stavmi a dátumami aktuálnosti | `GET /v1/lookup/{id}` |
+| `get_data_freshness` | Stav a dátum aktuálnosti každého zdroja | `GET /v1/sources` |
+
+Každý výsledok nesie telo REST odpovede ako štruktúrovaný obsah a krátke zhrnutie, ktoré končí uvedením zdroja.
+Popisy nástrojov naučia agenta pravidlá, ktoré by vývojár čítal tu: výsledok vyhľadávania je kandidát, nie fakt;
+<State is="unknown" /> nikdy neznamená „nenájdené“; §7 a §7a sú registrované, ale nie sú platiteľmi DPH; jedno IČ DPH
+môže patriť viacerým subjektom. `503` sa zmení na chybu nástroja, ktorá to povie slovami, takže agent si výpadok
+nepomýli s „nenájdené“.
+
+Presný zoznam nástrojov so všetkými schémami je v repozitári ako `api/mcp-tools.json`.
+
+## Pripojenie klienta
+
+<Prompt description="Nechajte svojho AI agenta **pripojiť** MCP nástroje registra k vášmu klientovi." actions={["copy"]}>
+Pripoj MCP server Accquix Register k tomuto AI klientovi.
+
+- Inštancia beží na `https://register.example.internal` (opýtaj sa ma na skutočnú adresu). Skontroluj `GET /v1/capabilities` s `Authorization: Bearer <kľúč>`: musí ukázať `"mcp": { "enabled": true }`. Ak nie, povedz mi, aby som na inštancii nastavil `REGISTER_MCP=true`, a skonči.
+- Ak tento klient podporuje Streamable HTTP (napríklad Claude Code alebo Cursor), pridaj server s názvom `accquix-register`, URL `<inštancia>/mcp` a hlavičkou `Authorization: Bearer <kľúč>`. Kľúč čítaj z premennej prostredia; nikdy ho nezapisuj do súboru, ktorý sa commituje.
+- Ak tento klient spúšťa len lokálne servery cez stdio (napríklad Claude Desktop), použi príkaz `accquix-register mcp --url <inštancia>` s kľúčom v premennej prostredia `REGISTER_MCP_KEY`.
+- Vypíš nástroje: očakávaj `search_subjects`, `lookup_subject` a `get_data_freshness`, všetky len na čítanie. Na kontrolu spusti jedno vyhľadávanie a ukáž mi odpoveď.
+</Prompt>
+
+<Tabs>
+  <Tab title="Claude Code">
+    ```sh
+    claude mcp add --transport http accquix-register https://register.example.internal/mcp \
+      --header "Authorization: Bearer $REGISTER_KEY"
+    ```
+  </Tab>
+  <Tab title="Cursor">
+    V `.cursor/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "accquix-register": {
+          "url": "https://register.example.internal/mcp",
+          "headers": { "Authorization": "Bearer ${env:REGISTER_KEY}" }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Claude Desktop">
+    Claude Desktop spúšťa lokálne servery cez stdio, preto použite lokálny adaptér. Každé volanie posiela do REST API
+    vašej inštancie a k databáze sa nikdy nepripája. V `claude_desktop_config.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "accquix-register": {
+          "command": "accquix-register",
+          "args": ["mcp", "--url", "https://register.example.internal"],
+          "env": { "REGISTER_MCP_KEY": "<váš API kľúč>" }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Každému agentovi dajte vlastný API kľúč: meno kľúča je v logoch a má vlastný limit požiadaviek.
+
+## Bezpečnosť
+
+- **Len na čítanie.** Žiadny nástroj nemôže meniť dáta, námietky ani nastavenia a žiadny taký nepribudne.
+- **Rovnaké kľúče a limity ako REST.** Chýbajúci alebo nesprávny kľúč dostane HTTP `401`; volanie nástroja stojí
+  jednu požiadavku z rozpočtu volajúceho. Anonymné inštancie si zachovávajú svoje obmedzenia vrátane zákazu
+  overenia fyzických osôb podľa DIČ.
+- **Stránky v prehliadači sa odmietnu.** Požiadavka z webovej stránky iného pôvodu dostane `403`, ako ochrana proti
+  DNS rebindingu. Konkrétne pôvody povoľte cez `REGISTER_MCP_ALLOWED_ORIGINS`, len ak si stavate vlastného klienta v
+  prehliadači.
+- **Logy.** Požiadavka na `/mcp` a jeden riadok na volanie nástroja s jeho menom a stavom; nikdy dopyt,
+  identifikátor ani výsledok.
+- **Dáta, nie pokyny.** Názvy firiem vo výsledkoch pochádzajú z verejných registrov. Server agentovi hovorí, aby ich
+  bral ako dáta, no agent, ktorý koná sám (posiela e-maily, platí faktúry), by mal aj tak potvrdiť s človekom.

@@ -1,0 +1,71 @@
+---
+title: Ako funguje vyhľadávanie
+sidebar:
+  label: Vyhľadávanie
+description: Ako funguje predvolené a voliteľné približné vyhľadávanie, ako sa výsledky radia a koľko stoja.
+---
+
+Vyhľadávacie pole je jedno. Identifikátor sa hľadá presne; čokoľvek iné je vyhľadávanie podľa názvu medzi
+aktívnymi subjektmi. Názvy sa porovnávajú bez diakritiky, bez ohľadu na veľké písmená a bez právnej formy, takže
+`Zlatá Rybka, s.r.o.`, `zlata rybka` a `ZLATÁ RYBKA a.s.` sú tie isté slová.
+
+## Predvolené vyhľadávanie
+
+Predvolené vyhľadávanie odpovedá počas písania. Má dva kroky:
+
+1. **Začiatok názvu**: názvy, ktoré začínajú dopytom. `zlata ryb` nájde `Zlatá Rybka, s.r.o.`.
+2. **Začiatky slov**: každé slovo dopytu musí byť začiatkom niektorého slova názvu, v ľubovoľnom poradí.
+   `rybka zlata` aj `ryb` ho nájdu tiež.
+
+Druhý krok sa spustí, keď prvý vrátil menej ako 10 výsledkov alebo keď je najvzácnejšie slovo dopytu dosť vzácne na
+to, aby bol lacný. Riadi ho najvzácnejšie slovo a má strop, takže veľmi časté slovo (`obec`, `slovenska`) dopyt
+nepredraží.
+
+**Poradie:** najprv presná zhoda názvu, potom názvy, ktoré obsahujú všetky slová dopytu ako celé slová, potom názvy
+začínajúce dopytom, potom kratšie názvy. Dáta neobsahujú údaj o popularite, preto si ho register nevymýšľa.
+
+## Približné vyhľadávanie (voliteľné)
+
+`mode=fuzzy` opravuje preklepy. **Nikdy sa nespúšťa automaticky**: zavolajte ho, keď predvolené vyhľadávanie nič
+nenašlo a používateľ o to požiada, napríklad tlačidlom „Hľadať s preklepmi?“.
+
+<Steps>
+  <Step title="Známe slová zostávajú">
+    Slová dopytu, ktoré sú začiatkom známeho slova, zostanú, ako boli napísané.
+  </Step>
+  <Step title="Neznáme slová sa opravia">
+    Každé neznáme slovo sa porovná so slovníkom všetkých slov v registri: najprv podľa trigramov, potom podľa
+    editačnej vzdialenosti so zámenou susedných písmen. `sporitelan` → `sporitelna` je jedna zámena. Slovo do štyroch
+    písmen môže mať jeden preklep, dlhšie dva; krátke slovo sa porovná so všetkými slovami vzdialenými o jednu úpravu,
+    lebo má na prvý krok priveľa málo trigramov.
+  </Step>
+  <Step title="Hľadá sa s opravami">
+    Opravené slová prejdú predvoleným vyhľadávaním podľa slov. Odpoveď uvádza opravy.
+  </Step>
+</Steps>
+
+Približné vyhľadávanie je **voliteľné a môže byť náročné na procesor** a **nikdy nenahrádza presné porovnanie
+identifikátorov**. Prevádzkovateľ ho môže vypnúť (`REGISTER_SEARCH_FUZZY=false`); `/v1/capabilities` klientom
+povie, či je zapnuté. Má vlastný limit požiadaviek, limit súbežných dopytov a časový limit.
+
+## Koľko to stojí
+
+Namerané na reálnych dátach (1 017 893 aktívnych subjektov) na malej databáze:
+
+| | Predvolené | Približné |
+| --- | --- | --- |
+| Bežne | 1–5 ms | 3–5 ms |
+| Najhoršie dopyty, plný výkon | do 10 ms | asi 60 ms |
+| Najhoršie dopyty, databáza s 1/8 vCPU | asi 50 ms | stovky ms |
+
+Pri plnom vyťažení databáza s 1/8 vCPU zvládne asi 30 predvolených vyhľadávaní za sekundu a s 1/4 vCPU 75–140.
+S oneskorením na strane klienta približne 120 ms pošle píšuci človek jedno až tri vyhľadávania za sekundu.
+
+## Čo vyhľadávanie nerobí
+
+- Zaniknuté subjekty nie sú vo vyhľadávaní podľa názvu. Presný identifikátor ich nájde s `active: false`.
+- Fyzické osoby bez IČO (daňovníci známi len podľa DIČ) nie sú vo vyhľadávaní nikdy.
+- Subjekt vyradený z vyhľadávania po námietke sa stále nájde podľa presného identifikátora.
+- Výsledkov je najviac 20; stránkovanie v1 nemá.
+- Skloňované tvary sú iné slová: `lipa` nenájde „U Lipy“. Napíšte začiatok slova (`lip`) alebo použite približné
+  vyhľadávanie na jedno zmenené písmeno.

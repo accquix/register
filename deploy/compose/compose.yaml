@@ -1,0 +1,127 @@
+# Accquix Register, reference self-hosted deployment.
+# See docs/self-hosting.md. Create the secret files first with ./make-secrets.sh (no default
+# credentials). Each process gets its own database role and only its own secret:
+#   migrate   register_migrate   owns the schema, grants the others their table rights
+#   sync      register_sync      writes the mirror and the search layer
+#   operator  register_operator  changes the objections (`docker compose run --rm operator suppress …`)
+#   serve     register_api       reads the published data, nothing else
+# The roles are created by initdb/10-roles.sh when the pgdata volume is first initialised
+# (an older volume: ./upgrade-roles.sh).
+#
+# After the first start, confirm the objections of this installation, or the API stays not ready:
+#   a new installation:   docker compose run --rm operator suppress --init-empty
+#   a rebuilt one:        docker compose run --rm -T operator suppress --restore - < objections.tsv
+name: accquix-register
+
+x-register: &register
+  image: ${REGISTER_IMAGE:-accquix-register:local}
+  build:
+    context: ../..
+    args:
+      VERSION: ${REGISTER_VERSION:-dev}
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: register
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password, migrate_password, sync_password, operator_password, api_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d register"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *register
+    command: ["migrate"]
+    environment:
+      REGISTER_MIGRATE_DATABASE_URL_FILE: /run/secrets/migrate_database_url
+      # migrate grants each role exactly the table rights it needs
+      REGISTER_DB_ROLE_API: register_api
+      REGISTER_DB_ROLE_SYNC: register_sync
+      REGISTER_DB_ROLE_OPERATOR: register_operator
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    secrets: [migrate_database_url]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  sync:
+    <<: *register
+    # one pass every hour; a pass with nothing new costs a few requests
+    command: ["sync", "--every", "${REGISTER_SYNC_EVERY:-1h}"]
+    environment:
+      REGISTER_SYNC_DATABASE_URL_FILE: /run/secrets/sync_database_url
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+    secrets: [sync_database_url]
+    volumes:
+      - work:/var/lib/accquix-register
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Not started by `up`: run it for objections, e.g. `docker compose run --rm operator suppress --list`.
+  operator:
+    <<: *register
+    profiles: [operator]
+    entrypoint: ["/usr/local/bin/accquix-register"]
+    command: ["suppress", "--list"]
+    environment:
+      REGISTER_OPERATOR_DATABASE_URL_FILE: /run/secrets/operator_database_url
+    secrets: [operator_database_url]
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  serve:
+    <<: *register
+    command: ["serve"]
+    environment:
+      REGISTER_DATABASE_URL_FILE: /run/secrets/database_url
+      REGISTER_API_KEYS_FILE: /run/secrets/api_keys
+      REGISTER_LOG_LEVEL: ${REGISTER_LOG_LEVEL:-info}
+      REGISTER_SEARCH_FUZZY: ${REGISTER_SEARCH_FUZZY:-true}
+      # the read-only MCP endpoint /mcp for AI agents (docs: AI agents (MCP)); off by default
+      REGISTER_MCP: ${REGISTER_MCP:-false}
+    secrets: [database_url, api_keys]
+    ports:
+      - "${REGISTER_PUBLISH:-127.0.0.1:8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  migrate_password:
+    file: ./secrets/migrate_password
+  sync_password:
+    file: ./secrets/sync_password
+  operator_password:
+    file: ./secrets/operator_password
+  api_password:
+    file: ./secrets/api_password
+  migrate_database_url:
+    file: ./secrets/migrate_database_url
+  sync_database_url:
+    file: ./secrets/sync_database_url
+  operator_database_url:
+    file: ./secrets/operator_database_url
+  database_url:
+    file: ./secrets/database_url
+  api_keys:
+    file: ./secrets/api_keys
+
+volumes:
+  pgdata:
+  work:

@@ -1,0 +1,49 @@
+---
+title: Subjects and identifiers
+description: One subject per IČO with all its registrations, how identifiers are matched, and the quirks of the source data.
+---
+
+## One subject, several registrations
+
+In RPO, one IČO can have **several records**: a sole trader has one per source register (for example the Trade
+Register and the register of financial agents), and an old company can have closed branch records. About 22 600
+IČOs have more than one active record.
+
+Accquix Register treats them as **one subject**:
+
+- the lookup returns `identity.registrations[]`, one entry per record, each with its register, office, number,
+  the name in that record, and whether it is active;
+- the **display name** comes from the Commercial Register or Trade Register record, else from the most recently
+  changed record;
+- **every official name is searchable**, so a sole trader is found under any of the names they use;
+- a record without a valid IČO keeps its own identity, keyed by its RPO id.
+
+## Identifiers are matched exactly
+
+| Typed | Recognised as | Example |
+| --- | --- | --- |
+| 8 digits | IČO | `99900001` |
+| 10 digits | DIČ | `2099900001` |
+| `SK` + 10 digits | IČ DPH | `SK2099900001` |
+
+Spaces are ignored and `sk` is accepted. Identifiers are **never matched fuzzily**: an IČO that differs by one digit
+is another, real company.
+
+:::warning[The IČO check digit is a warning only]
+The last digit of an IČO is a mod-11 check digit. In the real data, 778 IČOs fail it, 16 of them active.
+So a failing IČO is never rejected: when it exists in RPO it is returned, and `identity.icoChecksumValid` says
+`false`.
+:::
+
+**An IČ DPH is not a unique key.** The members of a VAT group (§4b) share one IČ DPH, so a lookup by IČ DPH can
+return several subjects.
+
+## What the source data looks like
+
+These facts, found in the real files, shape how the register reads them:
+
+- about 6 600 RPO records carry a text placeholder instead of an IČO; they are treated as having no IČO;
+- some IČOs in the Financial Administration lists are not 8 digits (mostly 12-digit numbers of another kind);
+- RPO writes the PSČ both as `83237` and `811 06`; the register returns `NNN NN`;
+- when a subject is terminated, RPO closes every attribute; the register then shows the last valid value;
+- the special VAT scheme list can have several periods with the same start date for one subject.

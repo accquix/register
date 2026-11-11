@@ -1,0 +1,71 @@
+---
+title: Ako to funguje
+description: Zdroje, synchronizácia, ktorá ich zrkadlí, vyhľadávacia vrstva a API, ktoré ich sprístupňuje.
+---
+
+Accquix Register je jeden binárny súbor v Go so štyrmi režimami: `migrate` aplikuje schému, `sync` zrkadlí zdroje,
+`serve` odpovedá na API a `openapi` vypíše kontrakt API. `sync` a `serve` bežia nezávisle, takže náročný import
+nikdy neberie výkon požiadavkám API.
+
+## Zdroje
+
+| Zdroj | Vydavateľ | Čo poskytuje | Ako sa číta |
+| --- | --- | --- | --- |
+| **RPO**, register právnických osôb | Ministerstvo vnútra | IČO, názov, právna forma, adresa, vznik a zánik, zápis v zdrojovom registri | Mesačný snapshot (23 súborov, asi 940 MB) a denné súbory zmien z verejného úložiska |
+| **ds_dsrdp** | Finančná správa | DIČ | Denný ZIP export |
+| **ds_dphs** | Finančná správa | IČ DPH, paragraf a dátumy registrácie | Denný ZIP export |
+| **ds_iz_ran** | Finančná správa | Index spoľahlivosti | ZIP export, aktualizovaný nepravidelne |
+| **ds_dphz**, **ds_dphv** | Finančná správa | Zoznam platiteľov DPH s dôvodmi na zrušenie registrácie a vyradenia z neho | Denné ZIP exporty |
+| **ds_dpho** | Finančná správa | Osobitná úprava uplatňovania DPH | Denný ZIP export |
+
+Nikdy sa nesťahujú: zoznamy IBAN Finančnej správy (ich licencia zakazuje komerčné použitie) a VIES (jeho podmienky
+zakazujú zrkadlenie). Register účtovných závierok (RÚZ) nie je súčasťou v1.
+
+## Synchronizácia
+
+Jeden prechod synchronizácie prejde všetky zdroje a urobí, čo je potrebné. Môžete ho spúšťať často: keď nie je nič
+nové, stojí pár požiadaviek a asi dve sekundy.
+
+<Steps>
+  <Step title="Prvotné naplnenie (prvý beh)">
+    Počká, kým je najnovší snapshot RPO kompletný, paralelne stiahne jeho časti, aplikuje ich, aplikuje denné súbory
+    po ňom, zostaví vyhľadávaciu vrstvu a načíta šesť zoznamov Finančnej správy. Kým to všetko nie je zverejnené, API
+    odpovedá `503 bootstrapping`.
+  </Step>
+  <Step title="Denne">
+    Aplikuje ďalší denný súbor RPO, vždy po jednom dni. Chýbajúci deň sa nikdy nepreskočí: stav sa zmení na
+    `gap_wait`, kým súbor nepríde alebo medzeru nevyplní novší snapshot. Každý zoznam sa sťahuje s ETag; nezmenený
+    zoznam stojí jednu odpoveď `304`.
+  </Step>
+  <Step title="Mesačné zosúladenie">
+    Nový snapshot RPO sa zlúči s ochranou poradia, takže nikdy neprepíše novší denný súbor. Záznamy, ktoré už
+    neobsahuje, sa označia ako chýbajúce, v rámci prahu.
+  </Step>
+</Steps>
+
+Každý súbor sa aplikuje ako **jedna databázová transakcia** s kontrolným bodom. Proces možno kedykoľvek zastaviť;
+ďalší prechod zopakuje len nedokončený súbor a opätovné aplikovanie súboru nič nezapíše. Naraz beží iba jedna
+synchronizácia.
+
+**Validácia zastaví zlé dáta.** Súbor, ktorý prekročí prah (príliš veľký denný súbor, zoznam, ktorý sa príliš
+zmenšil, chyba pri spracovaní, starší dátum zoznamu), sa neaplikuje. Predchádzajúce dáta sa naďalej poskytujú a
+zdroj prejde do stavu `blocked` s diagnostikou, kým sa naň nepozrie prevádzkovateľ. Pozrite
+[Prevádzka](/sk/self-hosting/operations).
+
+Jeden prípad nie je chyba. Položka zoznamu bez akéhokoľvek identifikátora (bez DIČ, IČO aj IČ DPH) alebo položka
+zoznamu daňových subjektov s IČO, ale zatiaľ bez DIČ, nemôže patriť žiadnemu subjektu, ktorý register vie pomenovať.
+Vynechá sa a započíta (`skippedItems` v `GET /v1/sources`); viac ako 100 v jednom súbore zoznam zablokuje. Takéto
+položky sa nikdy nepriraďujú k firme podľa mena ani adresy.
+
+## Vyhľadávacia vrstva
+
+Po každom súbore synchronizácia obnoví vyhľadávacie riadky subjektov, ktorých sa súbor dotkol: každý oficiálny
+názov každého aktívneho subjektu, jeho slová a slovník všetkých slov s ich počtami. Vyhľadávanie číta len tieto
+úzke tabuľky, preto zostáva rýchle aj na malej databáze. Pozrite [Vyhľadávanie](/sk/concepts/search).
+
+## API
+
+`serve` odpovedá na päť endpointov: vyhľadávanie, overenie, hromadné overenie, zdroje a možnosti. Každá odpoveď
+obsahuje uvedenie zdroja, ktoré vyžadujú licencie. Každá časť overenia uvádza, odkiaľ pochádza, aká je aktuálna a
+či zdroj naozaj nemá záznam, alebo to register jednoducho nevie. Pozrite
+[Aktuálnosť a istota](/sk/concepts/freshness).

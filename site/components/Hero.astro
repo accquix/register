@@ -1,0 +1,15 @@
+---
+// Landing hero: eyebrow, headline, lead and a row of actions (the slot).
+interface Props {
+  eyebrow?: string;
+  title: string;
+  lead: string;
+}
+const { eyebrow, title, lead } = Astro.props;
+---
+<section class="mx-auto w-full max-w-5xl px-4 pt-12 pb-6 md:px-6 md:pt-20 md:pb-8">
+  {eyebrow && <p style="margin: 0 0 1rem" class="font-medium text-accent text-sm">{eyebrow}</p>}
+  <h1 style="margin: 0" class="max-w-3xl text-balance font-display font-semibold text-4xl text-foreground leading-[1.08] md:text-6xl">{title}</h1>
+  <p style="margin: 1.25rem 0 0" class="max-w-2xl text-pretty text-lg text-muted-foreground md:text-xl">{lead}</p>
+  <div class="mt-8 flex flex-wrap gap-3"><slot /></div>
+</section>

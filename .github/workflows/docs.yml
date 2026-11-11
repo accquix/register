@@ -1,0 +1,43 @@
+name: docs
+
+# Builds and checks the documentation site (site/, Blume) on every pull request and push to main
+# that touches it. Cloudflare Workers Builds deploys the site itself from the repository (path
+# site, build command `npm ci && npx blume build`, deploy command `npx wrangler deploy`, served as
+# static assets per site/wrangler.jsonc), so this workflow holds no deploy credentials.
+
+on:
+  pull_request:
+    paths: ["site/**", "api/openapi.yaml", ".github/workflows/docs.yml"]
+  push:
+    branches: [main]
+    paths: ["site/**", "api/openapi.yaml", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - name: build (fails on content errors)
+        run: npx blume build
+      - name: check links
+        run: npx blume validate
+      - name: every English page has a Slovak page
+        run: diff <(cd docs && find . -name '*.mdx' -not -path './sk/*' | sort) <(cd docs/sk && find . -name '*.mdx' | sort)
+        shell: bash
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: site
+          path: site/dist
+          retention-days: 7

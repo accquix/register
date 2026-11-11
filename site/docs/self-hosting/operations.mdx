@@ -1,0 +1,75 @@
+---
+title: Operations
+description: "Running an instance: health and freshness checks, what to do when a source is blocked, handling objections, upgrades and rebuilding the data."
+---
+
+## Monitoring
+
+| Check | What to watch |
+| --- | --- |
+| `GET /livez` | The process is up. |
+| `GET /readyz` | `503` until every source is first published, or when the database is unreachable. |
+| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`, `skippedItems`. |
+
+Alert when:
+
+- any source is **`blocked`**: validation stopped an update;
+- `rpo` stays in **`gap_wait`** for more than a day (a daily file is missing);
+- any source is **`stale`** (RPO older than 3 days, a list older than 2 days, the reliability index older than 14).
+
+## A blocked source
+
+A file that breaks a threshold is not applied: the previous data stays served, and the source is `blocked` with a
+diagnostic, for example `daily file has 25 000 records, more than 20 000`. Nothing else stops: the other sources keep
+updating.
+
+<Steps>
+  <Step title="Read the diagnostic">
+    `GET /v1/sources`, or the `sync` log.
+  </Step>
+  <Step title="Decide">
+    If the file is broken, wait: the agency usually republishes. If the change is real (a list really shrank), raise
+    the threshold for one run: `REGISTER_RPO_DAILY_MAX_RECORDS`, `REGISTER_FS_MAX_DROP`, `REGISTER_ABSENCE_MAX_RATIO`.
+  </Step>
+  <Step title="Unblock">
+    ```sh
+    accquix-register sync --unblock --source rpo          # or --source fs:ds_dphs
+    accquix-register sync                                   # the next pass retries the file
+    ```
+  </Step>
+</Steps>
+
+## Objections
+
+Natural persons, mostly sole traders, can object to appearing in name search. Keep the subject out of search; exact
+lookup by identifier keeps working:
+
+```sh
+accquix-register suppress --subject 99900004 --reason "ticket 123"
+accquix-register suppress --list                       # every objection with its number
+accquix-register suppress --undo --id 1                # revoke one objection
+```
+
+Each objection has a number. It is linked to the records that carry the IČO when you record it, and the sync links
+every record it later sees carrying it (with a warning in the log). A linked record stays hidden when it loses or
+changes its IČO, and a link never extends to other records with the new IČO. The register cannot tell a source
+mistake from a real change, so it errs towards hiding: if a file wrongly gives another subject's record the
+objected IČO, that one record stays hidden. `suppress --list --id N` shows every link and the file that caused it,
+and `suppress --release --id N --record R` excludes one record for good without touching the objection. An undo
+revokes one objection and tells you how many records other objections still hide. Export the objections after
+every change (`suppress --export`): they are the only data a rebuild cannot restore. Do not put personal data into
+`--reason`.
+
+## Upgrades
+
+1. Pull or build the new image.
+2. Run `accquix-register migrate`.
+3. Restart `serve` and `sync`.
+
+## Rebuild from scratch
+
+```sh
+docker compose down -v && docker compose up -d
+```
+
+The next sync downloads and publishes everything again in about 15 minutes. Versions stay the same.

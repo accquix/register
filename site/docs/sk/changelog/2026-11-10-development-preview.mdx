@@ -1,0 +1,23 @@
+---
+title: Vývojová verzia
+type: changelog
+date: 2026-11-10
+description: Prvá funkčná verzia pred akýmkoľvek vydaním. Zatiaľ nie na produkčné použitie.
+changelog:
+  category: Náhľad
+---
+
+Prvá verzia, ktorá synchronizuje skutočné zdroje a obsluhuje API. Zatiaľ neexistuje vydanie, obraz ani stabilný
+kontrakt: všetko sa ešte môže zmeniť pred verziou v1.0.
+
+- **Synchronizácia** registra právnických osôb (snapshot a denné súbory) a šiestich zoznamov Finančnej správy s
+  prahmi validácie, ktoré podozrivú aktualizáciu zablokujú namiesto zverejnenia.
+- **Vyhľadávanie**: jedno pole pre názov, IČO, DIČ alebo IČ DPH s adaptívnym predvoleným režimom a voliteľným
+  približným režimom.
+- **Overenie** podľa IČO, DIČ alebo IČ DPH so stavmi <State is="present" />, <State is="absent" /> a
+  <State is="unknown" /> pri každej časti, dátumami aktuálnosti a verziami obsahu; hromadné overenie na sledovanie
+  zmien.
+- **Vlastná prevádzka** cez docker compose: samostatné databázové roly pre migrate, sync a API.
+- **Námietky**: subjekt možno vyradiť z vyhľadávania podľa názvu, so zálohou a obnovou zoznamu.
+
+Zostávajúce kontroly pred prvým produkčným použitím sú v otvorených otázkach projektu.

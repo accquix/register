@@ -1,0 +1,71 @@
+---
+title: How search works
+sidebar:
+  label: Search
+description: How the default search and the optional fuzzy search work, how results are ranked, and what each costs.
+---
+
+There is one search box. An identifier is looked up exactly; anything else is a name search over the active
+subjects. Names are compared without diacritics, without case and without the legal form, so
+`Zlatá Rybka, s.r.o.`, `zlata rybka` and `ZLATÁ RYBKA a.s.` are the same words.
+
+## Default search
+
+The default search answers as you type. It runs two steps:
+
+1. **Name prefix**: names that start with the query. `zlata ryb` finds `Zlatá Rybka, s.r.o.`.
+2. **Word prefixes**: every word of the query must be the start of a word of the name, in any order.
+   `rybka zlata` and `ryb` find it too.
+
+The second step runs when the first one returned fewer than 10 results, or when the rarest query word is rare
+enough to be cheap. It is driven by the rarest word and capped, so a very common word (`obec`, `slovenska`) does not
+make the query expensive.
+
+**Ranking:** an exact name first, then names that contain all query words as whole words, then names that start with
+the query, then shorter names. There is no popularity signal in the data, so the register does not invent one.
+
+## Fuzzy search (optional)
+
+`mode=fuzzy` corrects typos. It is **never automatic**: call it when the default search found nothing and the user
+asks for it, for example with a "Search with typos?" button.
+
+<Steps>
+  <Step title="Keep known words">
+    Query words that are the start of a known word stay as typed.
+  </Step>
+  <Step title="Correct unknown words">
+    Each unknown word is compared with the dictionary of all words in the register: first by trigrams, then by edit
+    distance with adjacent transpositions. `sporitelan` → `sporitelna` is one transposition. A word of up to four
+    letters may have one typo, a longer word two; a short word is checked against every word one edit away, since
+    it has too few trigrams for the first step.
+  </Step>
+  <Step title="Search with the corrections">
+    The corrected words go through the default word search. The response lists the corrections.
+  </Step>
+</Steps>
+
+Fuzzy search is **optional and potentially CPU-intensive**, and it **never substitutes exact identifier matching**.
+Operators can switch it off (`REGISTER_SEARCH_FUZZY=false`); `/v1/capabilities` tells clients whether it is on. It
+has its own rate limit, a limit on concurrent fuzzy searches and a timeout.
+
+## What it costs
+
+Measured on the real data (1 017 893 active subjects) on a small database:
+
+| | Default search | Fuzzy search |
+| --- | --- | --- |
+| Typical | 1–5 ms | 3–5 ms |
+| Worst queries, full machine | under 10 ms | about 60 ms |
+| Worst queries, 1/8 vCPU database | about 50 ms | hundreds of ms |
+
+When the database is saturated, a 1/8 vCPU tier answers about 30 default searches a second and a 1/4 vCPU tier
+75–140. With a client debounce of about 120 ms, a person typing sends one to three searches a second.
+
+## What search does not do
+
+- Terminated subjects are not in name search. An exact identifier finds them, flagged `active: false`.
+- Natural persons without an IČO (taxpayers known only by DIČ) are never in search.
+- A subject kept out of search after an objection is still found by its exact identifier.
+- Results are capped at 20; there is no paging in v1.
+- Inflected forms are different words: `lipa` does not find "U Lipy". Type the start of the word (`lip`), or use
+  fuzzy search for one changed letter.

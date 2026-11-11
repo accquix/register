@@ -1,0 +1,43 @@
+---
+title: Versions and stability
+description: What your integration can rely on across versions, what counts as a breaking change, and how a change is announced.
+---
+
+Accquix Register follows [Semantic Versioning](https://semver.org). The HTTP API has its own major version in the
+path: everything on this site is `/v1`. A future `/v2` would be served next to `/v1`, so upgrading an instance never
+forces a change on its consumers.
+
+## What you can rely on
+
+- **The shape of the API** as in the OpenAPI document (`/openapi.json` on your instance) and the MCP tools.
+- **The meaning of the answers**: `404` only from fresh data; <State is="unknown" /> never as "not found";
+  `vat.payer` `true` or `false` only from fresh data; §7 and §7a registered but not VAT payers; section versions
+  that change only when the data change.
+- **Closed values** that never gain a new member within `/v1`: a section's `state`, the lookup `type`, a subject's
+  `kind`, the search `mode`.
+
+## What can change in a compatible release
+
+- New endpoints, new optional parameters and **new fields in a response**. Ignore fields you do not know.
+- New values of the problem `code` and `reason`. Handle an unknown `code` by its HTTP status, and an unknown
+  `reason` as "unavailable for now".
+- The order and the exact set of search results, as relevance improves. Search proposes; only an exact identifier
+  resolves.
+- The text of error `title` and `detail`, and default limits and timeouts. A changed default is in the changelog.
+
+## How a removal is announced
+
+1. The field or endpoint is marked `deprecated` in the OpenAPI document, the API sends `Deprecation` and `Sunset`
+   headers, and the changelog names the replacement.
+2. It keeps working for at least **6 months** and until the next major version.
+3. It is removed only in a major version.
+
+A security fix can need a change sooner; the changelog and the security advisory then say so.
+
+## Release candidates
+
+A release candidate, such as `1.0.0-rc.1`, freezes the contract of the coming release. Between the candidate and
+the release, a contract changes only to fix a defect, and the changelog says so.
+
+The full policy, including the command line, the configuration and the backup file format, is in
+`docs/stability.md` in the repository.

@@ -1,0 +1,85 @@
+---
+title: Overenie subjektu
+description: GET /v1/lookup/{id} podľa IČO, DIČ alebo IČ DPH a význam jednotlivých častí odpovede.
+seo:
+  title: Overenie firmy podľa IČO, DIČ a IČ DPH
+---
+
+```http
+GET /v1/lookup/{id}
+```
+
+`id` je IČO (8 číslic), DIČ (10 číslic) alebo IČ DPH (`SK` + 10 číslic). Čokoľvek iné vráti
+`400 invalid_identifier`.
+
+| Overenie podľa | Vráti |
+| --- | --- |
+| IČO | Jeden subjekt. |
+| DIČ | Subjekt s týmto DIČ. Fyzická osoba bez IČO dostane len `taxpayer` (DIČ, meno, obec), a to iba pre overený kľúč na inštancii bez anonymného prístupu. |
+| IČ DPH | Všetky subjekty registrované pod ním: jeden, alebo viac pri skupine DPH. |
+
+## Príklad
+
+```json title="GET /v1/lookup/99900001 (skrátené)" {7-8,24,29}
+{
+  "type": "ico",
+  "subjects": [
+    {
+      "ico": "99900001",
+      "identity": {
+        "state": "present",
+        "source": { "dataset": "rpo", "asOf": "2026-11-10", "version": "4f2a…", "stale": false },
+        "name": "Zlatá Rybka, s.r.o.",
+        "kind": "legal_person",
+        "legalForm": "Spoločnosť s ručením obmedzeným",
+        "establishedOn": "2020-01-01",
+        "active": true,
+        "address": { "street": "Testovacia", "buildingNumber": "1/1", "postalCode": "999 99", "municipality": "Fiktívne Mesto", "country": "Slovenská republika" },
+        "registrations": [
+          { "register": "Obchodný register", "registerCode": "1", "office": "Okresný súd Fiktívny", "number": "Sro/1/F", "validFrom": "2020-01-01", "name": "Zlatá Rybka, s.r.o.", "active": true }
+        ],
+        "icoChecksumValid": true
+      },
+      "tax": { "state": "present", "source": { "dataset": "ds_dsrdp", "asOf": "2026-11-10", "version": "…", "stale": false }, "dic": "2099900001" },
+      "vat": {
+        "state": "present",
+        "source": { "dataset": "ds_dphs", "asOf": "2026-11-10", "version": "…", "stale": false },
+        "icDph": "SK2099900001", "paragraph": "§4", "payer": true, "registeredOn": "2020-08-01", "payerFrom": "2020-08-01"
+      },
+      "risk": { "state": "present", "source": { "dataset": "ds_iz_ran,ds_dphz,ds_dphv,ds_dpho", "asOf": "2026-11-10", "stale": false }, "reliabilityIndex": "spoľahlivý" }
+    }
+  ],
+  "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
+}
+```
+
+Zvýraznené riadky čítajte ako prvé: `state` a `source` každej časti (ako istá je odpoveď a k akému dátumu),
+paragraf DPH s `payer` a uvedenie zdroja, ktoré musíte zobraziť spolu s dátami.
+
+## Časti odpovede
+
+| Časť | Zdroj | Obsahuje |
+| --- | --- | --- |
+| `identity` | RPO | Zobrazovaný názov, druh, právna forma, dátumy, adresa, všetky zápisy, upozornenie na kontrolnú číslicu IČO. |
+| `tax` | `ds_dsrdp` | DIČ. |
+| `vat` | `ds_dphs` | IČ DPH, paragraf, platiteľ, dátumy. Pozrite [Stav DPH](/sk/concepts/vat). |
+| `risk` | `ds_iz_ran`, `ds_dphz`, `ds_dphv`, `ds_dpho` | Index spoľahlivosti a záznamy v rizikových zoznamoch. |
+
+Každá časť má `state` (`present`, `absent`, `unknown`) a `source` s datasetom, jeho dátumom `asOf`, `changedAt`,
+`version` podľa obsahu a príznakom `stale`. Pozrite [Aktuálnosť a istota](/sk/concepts/freshness).
+
+## Zápis v registri na dokladoch
+
+`identity.registrations[]` uvádza súd a oddiel/vložku (obchodný register) alebo úrad a číslo (živnostenský
+register), takže klient môže predvyplniť právny údaj dodávateľa. Nechajte ho používateľa potvrdiť. Genitív názvu súdu
+a presné znenie si zostavuje klient.
+
+## Stavové kódy
+
+| Kód | Kedy |
+| --- | --- |
+| `200` | Nájdené (niektoré časti môžu byť `unknown` alebo `stale`). |
+| `400` | Nie je to identifikátor. |
+| `403` | Fyzická osoba podľa DIČ na inštancii s anonymným prístupom. |
+| `404` | Nenájdené a všetky použité zdroje sú aktuálne. |
+| `503` | Nenájdené, kým je niektorý zdroj neaktuálny (`source_stale`), alebo zrkadlo ešte nie je zostavené (`bootstrapping`). |

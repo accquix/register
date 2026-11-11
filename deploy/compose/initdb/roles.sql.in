@@ -1,0 +1,26 @@
+-- Roles of the reference deployment. Run by 10-roles.sh (a new data directory) and by
+-- upgrade-roles.sh (an existing one). Idempotent. psql variables: db and the four passwords.
+-- The ".in" suffix keeps the PostgreSQL entrypoint from running this file on its own.
+
+SELECT format('CREATE ROLE %I LOGIN', r) FROM unnest(ARRAY['register_migrate', 'register_sync', 'register_operator', 'register_api']) r
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gexec
+
+ALTER ROLE register_migrate  NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS LOGIN PASSWORD :'migrate_pw';
+ALTER ROLE register_sync     NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS LOGIN PASSWORD :'sync_pw';
+ALTER ROLE register_operator NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS LOGIN PASSWORD :'operator_pw';
+ALTER ROLE register_api      NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS LOGIN PASSWORD :'api_pw';
+
+-- The owner may create objects in the public schema and the trusted pg_trgm extension.
+ALTER DATABASE :"db" OWNER TO register_migrate;
+REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
+GRANT CONNECT ON DATABASE :"db" TO register_sync, register_operator, register_api;
+GRANT TEMPORARY ON DATABASE :"db" TO register_sync, register_operator;   -- both use temporary tables
+-- The register roles have no business in the maintenance database.
+REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;
+
+-- Table rights are granted by `migrate` (REGISTER_DB_ROLE_*), per table, after every migration.
+
+-- The API never writes; a runaway query is cut by the server too. These are defaults that a
+-- session could change: the boundary is the table rights, these are a second line.
+ALTER ROLE register_api SET default_transaction_read_only = on;
+ALTER ROLE register_api SET statement_timeout = '10s';

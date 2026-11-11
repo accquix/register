@@ -1,0 +1,83 @@
+---
+title: Konfigurácia
+description: Všetky príkazy programu accquix-register a všetky premenné prostredia REGISTER_* s predvolenými hodnotami pre serve, sync, migrate a demo.
+---
+
+Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `NAME` možno namiesto toho zadať ako
+`NAME_FILE`, cestu k súboru s hodnotou; zadať obe naraz je chyba.
+
+## Príkazy
+
+| Príkaz | Čo robí |
+| --- | --- |
+| `migrate [up]` | Aplikuje vstavané migrácie schémy. |
+| `migrate status` | Vypíše migrácie a či je každá aplikovaná. |
+| `migrate down-to N` | Vráti schému na verziu N (0 = prázdna schéma). Na vývoj. |
+| `sync [--source rpo\|fs\|all]` | Jeden prechod synchronizácie (predvolene `all`). |
+| `sync --every 1h` | Opakuje prechod, kým ho nezastavíte. Neúspešný prechod sa zaloguje; rozvrh pokračuje. |
+| `sync --unblock --source rpo` / `fs:<zoznam>` | Obnoví zdroj po zablokovaní validáciou. |
+| `serve` | HTTP API. |
+| `suppress --subject <IČO> [--reason TEXT]` | Zaznamená námietku: vyradí subjekt z vyhľadávania podľa názvu. Vypíše číslo námietky. |
+| `suppress --undo --id N` | Odvolá jednu námietku a oznámi, či subjekt stále skrýva iná. |
+| `suppress --list [--id N]` | Vypíše všetky námietky s ich číslami; s `--id` záznamy, ktoré námietka pokrýva, a prečo. |
+| `suppress --release --id N --record R` | Vyjme jeden záznam z námietky (chybné prepojenie); `--unrelease` vyňatie zruší. |
+| `suppress --export --output FILE [--overwrite]` | Zapíše zálohu námietok. Súbor uchovávajte v súkromí. |
+| `suppress --restore FILE` | Obnoví zálohu (`-` číta štandardný vstup) a potvrdí inštaláciu. |
+| `suppress --init-empty` | Potvrdí novú inštaláciu bez námietok na obnovenie. |
+| `mcp --url URL` | MCP cez stdio pre lokálneho AI klienta; posiela volania do REST API na URL. Pozrite [AI agenti (MCP)](/sk/api/mcp). |
+| `mcp-tools` | Vypíše zoznam nástrojov MCP. |
+| `demo` | Vykoná migrácie, nahrá fiktívne subjekty do novej, prázdnej databázy a natrvalo ju označí ako demo; `sync` ju potom odmietne. Pozri [Rýchly štart](/sk/quickstart#vyskúšajte-demo). |
+| `openapi` | Vypíše dokument OpenAPI 3.1. |
+| `version` | Vypíše verziu. |
+
+Návratové kódy: `0` úspech (aj keď zámok drží iná synchronizácia), `1` chyba (vrátane zablokovaného zdroja), `2`
+chyba v príkazovom riadku.
+
+## Databáza
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_DATABASE_URL` (tajomstvo) | — | Pripojenie k PostgreSQL; používa ho `serve`. |
+| `REGISTER_MIGRATE_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `migrate`, napríklad s rolou pre DDL. |
+| `REGISTER_SYNC_DATABASE_URL` (tajomstvo) | `REGISTER_DATABASE_URL` | Pre `sync`. Priame spojenie, nie pooler. |
+| `REGISTER_OPERATOR_DATABASE_URL` (tajomstvo) | `REGISTER_SYNC_DATABASE_URL` | Pre `suppress`: rola, ktorá môže meniť námietky. Priame spojenie. |
+| `REGISTER_DB_ROLE_API`, `_SYNC`, `_OPERATOR` | — | Názvy databázových rolí; `migrate` každej pridelí presne tie práva na tabuľky, ktoré potrebuje. Bez nastavenia sa nepridelí nič. |
+| `REGISTER_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. Logy nikdy neobsahujú mená, dopyty ani identifikátory. |
+
+## Synchronizácia
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_RPO_BUCKET_URL` | oficiálne úložisko | Základná adresa hromadných súborov RPO. |
+| `REGISTER_FS_BASE_URL` | `https://report.financnasprava.sk` | Základná adresa exportov zoznamov. |
+| `REGISTER_WORK_DIR` | `<temp>/accquix-register` | Rozpracované sťahovania. |
+| `REGISTER_DOWNLOAD_CONCURRENCY` | `6` | Paralelné sťahovanie častí snapshotu. |
+| `REGISTER_RPO_PART_RECORDS` | `100000` | Počet záznamov v každej časti snapshotu okrem poslednej. |
+| `REGISTER_RPO_DAILY_MAX_RECORDS` | `20000` | Väčší denný súbor sa odmietne. |
+| `REGISTER_RPO_SNAPSHOT_MIN_RATIO` | `0.98` | Menší nový snapshot zablokuje označovanie chýbajúcich záznamov. |
+| `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: označovanie chýbajúcich nad týmto podielom aktívnych záznamov sa zablokuje. |
+| `REGISTER_RPO_DATE_SKEW_DAYS` | `1` | RPO: súbor, ktorého `exportDate` sa od dátumu v názve líši o viac dní, sa odmietne; dátum po zajtrajšku vždy. |
+| `REGISTER_RPO_BOOTSTRAP_MIN_RECORDS` | `2200000` | RPO: prvý snímok s menším počtom záznamov sa nezverejní. |
+| `REGISTER_RPO_SNAPSHOT_SETTLE` | `2h` | RPO: snímok sa použije, až keď je jeho najnovší súbor v úložisku aspoň takto dlho. |
+| `REGISTER_FS_SKIP_MIN_ROWS` | `false` | Vypne minimálne počty riadkov zoznamov (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000, `ds_dphv` 10 000, `ds_dphz` 1 000, `ds_dpho` 300). |
+| `REGISTER_FS_MAX_DROP` | podľa zoznamu | Prepíše prah poklesu pre všetky zoznamy (predvolene 0,03 pre `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0,20 pre malé zoznamy). |
+
+## API
+
+| Premenná | Predvolené | Význam |
+| --- | --- | --- |
+| `REGISTER_LISTEN` | `:8080` | Adresa, na ktorej API počúva. |
+| `REGISTER_API_KEYS` (tajomstvo) | — | `meno:sha256hex,…`: odtlačky kľúčov. |
+| `REGISTER_ALLOW_ANONYMOUS` | `false` | Prevádzka bez kľúčov; vypne overenie fyzických osôb podľa DIČ. |
+| `REGISTER_SEARCH_FUZZY` | `true` | Zapne `mode=fuzzy`. |
+| `REGISTER_MCP` | `false` | Sprístupní MCP endpoint `/mcp` len na čítanie pre AI agentov. |
+| `REGISTER_MCP_ALLOWED_ORIGINS` | — | Pôvody prehliadača, ktoré smú volať `/mcp`, oddelené čiarkou. Prázdne odmietne všetky. |
+| `REGISTER_MCP_KEY` (tajomstvo) | — | Pre `mcp --url`: API kľúč, ktorý sa posiela inštancii. |
+| `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket pre každého klienta a inštanciu. |
+| `REGISTER_FUZZY_EVERY` | `5s` | Jedno približné vyhľadávanie na klienta za interval (nárazovo 2). |
+| `REGISTER_FUZZY_CONCURRENCY` | `1` | Súbežné približné vyhľadávania na inštanciu. |
+| `REGISTER_FUZZY_TIMEOUT` | `2s` | Časový limit približného vyhľadávania. |
+| `REGISTER_QUERY_TIMEOUT` | `3s` | Časový limit predvoleného vyhľadávania a overenia. |
+| `REGISTER_MAX_IN_FLIGHT` | veľkosť poolu | Koľko dátových požiadaviek inštancia vybavuje naraz. Ďalšia požiadavka čaká `REGISTER_ADMIT_WAIT` a potom dostane `503` s `reason: overloaded`, takže preťažená inštancia ďalej obsluhuje toľko, koľko zvládne. |
+| `REGISTER_ADMIT_WAIT` | `250ms` | Ako dlho požiadavka čaká na voľné miesto. |
+| `REGISTER_SEARCH_WORD_STEP_MAX` / `REGISTER_SEARCH_WORD_CAP` | `1000` / `1000` | Adaptívny krok podľa slov v predvolenom vyhľadávaní. |

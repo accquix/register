@@ -1,0 +1,68 @@
+---
+title: PlanetScale Postgres
+description: "Register na PlanetScale Postgres: rola, pg_strict, connection stringy, veľkosti namerané na reálnych dátach a zmena veľkosti za chodu."
+---
+
+<Callout type="note">
+Otestované 11. novembra 2026 na reálnych dátach, na klastroch s jedným uzlom vo Frankfurte s PostgreSQL 18.6: celý
+prvý beh, denné behy, vyhľadávanie, overenie, MCP, zmena veľkosti za chodu a záťaž do 140 požiadaviek za sekundu.
+</Callout>
+
+## Nastavenie
+
+1. **Vytvorte databázu:** PostgreSQL 18, jeden uzol alebo vysoká dostupnosť. Zvoľte región svojho API.
+2. **Vytvorte rolu,** ktorá dedí `postgres`: `migrate` vytvára tabuľky a rozšírenie `pg_trgm`. Ak chcete štatistiky
+   dopytov, pridajte `pg_read_all_stats`. Na rozdelenie rolí podľa úloh použite [roly](/sk/self-hosting/database#roly) na stránke Databáza.
+3. **Zapnite `pg_strict`** v nastaveniach rozšírení a nastavte `require_where_on_update` aj
+   `require_where_on_delete` na `on`. Register s oboma beží: nikdy nezapisuje bez `WHERE`.
+4. **Connection stringy:** port **5432** (priamo) pre `sync`, `migrate` a operátora, port **6432** (PgBouncer) s
+   rovnakými prihlasovacími údajmi pre `serve`. Ponechajte `sslmode=verify-full&sslrootcert=system` a pre API pridajte
+   `pool_max_conns` (pozri [pool spojení API](/sk/self-hosting/database#pool-spojení-api)). Malé veľkosti povoľujú 25 spojení.
+5. **Štatistiky dopytov** (`pg_stat_statements`) nie sú predvolene načítané; ak ich potrebujete, zapnite ich v
+   nastaveniach rozšírení.
+
+## Veľkosti
+
+| Veľkosť | vCPU, RAM | Nameraný limit, predvolené vyhľadávanie | Plánujte | Prvý beh |
+| --- | --- | --- | --- | --- |
+| PS‑5 | 1/16, 512 MB | 30 za sekundu počas 5 minút, ale CPU aj pamäť na 100 % už pri 10 za sekundu | na vyskúšanie a veľmi malú záťaž; nie do produkcie | 15 minút, pri záťaži |
+| PS‑10 | 1/8, 1 GB | asi 85 za sekundu; 60 za sekundu počas 10 minút pri plnom CPU | do asi 30 za sekundu | — |
+| PS‑20 | 1/4, 2 GB | asi 100–110 za sekundu | do asi 50 za sekundu | 7 minút |
+
+<Callout type="warning">
+**PS-5 je na vyskúšanie registra a na veľmi malú záťaž, nie do produkcie.** Jeho CPU aj pamäť boli na 100 % už pri 10
+vyhľadávaniach za sekundu, takže nezostáva rezerva na nával požiadaviek ani na mesačné porovnanie. Minimum do produkcie
+je **PS-10**.
+</Callout>
+
+## Čo očakávať
+
+- **Latencia:** API bolo v teste asi 20 ms od databázy a vyhľadávanie trvalo asi 150 ms (p50), väčšinou sieť. S API
+  v regióne databázy počítajte s oveľa menej.
+- **Overenie podľa IČO** je lacnejšie: 140 za sekundu na oboch veľkostiach. **Fuzzy vyhľadávanie** odpovedalo za
+  280–420 ms (p95).
+- **Zmena veľkosti beží za chodu,** bez novej databázy. Pri zmene z PS-10 na PS-5 klient, ktorý sa pýtal každé 2–3
+  sekundy, nedostal žiadnu chybu; jedno vyhľadávanie trvalo pri prepnutí 2 sekundy. Ak záleží aj na tejto pauze,
+  použite vysokú dostupnosť.
+- **Náročná synchronizácia spomalí vyhľadávanie na malom klastri.** Na PS-5 počas celého prvého behu do druhej
+  databázy, kým vyhľadávanie bežalo 10-krát za sekundu, stúplo p95 vyhľadávania na 0,7–2,8 s a 0,4 % vyhľadávaní
+  vypršal čas. Mesačné porovnanie zapisuje oveľa menej; na produkčnej veľkosti má rezervu.
+- **Veľkosť databázy** po prvom behu: 2,2 GB, s rezervou v rámci 10 GB, ktoré sú v cene.
+
+## Čo nás test naučil
+
+<Panel title="Ako sme testovali">
+Produkčný obraz bežal na notebooku v strednej Európe, asi 20 ms od databázy na jednu cestu tam a späť, s
+`pool_max_conns=20`. Záťaž bola v otvorenej slučke: požiadavky odchádzali pevnou rýchlosťou bez ohľadu na latenciu,
+v krokoch po 60 sekúnd a potom 10 minút bez prestávky. Dopyty vznikli zo 400 aktívnych subjektov vybraných z
+databázy: celé názvy, jednotlivé slová, začiatky slov a IČO. Veľkosť klastra sa medzi behmi menila za chodu. Metóda,
+všetky kroky a namerané čísla sú v `docs/managed-postgres-results.md` v repozitári.
+</Panel>
+
+<Panel title="Čo sme sa naučili">
+**Limitom môže byť pool spojení, nie databáza.** S poolom 4 (vtedy predvoleným) sa API zastavilo pri asi 27 vyhľadávaniach za sekundu, kým CPU databázy bolo na 25–50 %, a pri väčšej záťaži takmer prestalo odpovedať. Odvtedy je predvolený pool 10 a preťažená inštancia nadbytok hneď odmietne s `503 overloaded`. Nastavte `pool_max_conns` tak, aby sa ako prvá minula databáza, nie pool.
+
+**Krátke testy malým veľkostiam lichotia.** Malé klastre si môžu na chvíľu požičať CPU: minútové kroky vyzerali takmer rovnako na každej veľkosti a až 10-minútové behy a graf CPU ukázali, kde každá veľkosť naozaj končí.
+
+**Sledujte graf CPU, nielen latenciu.** Na najmenšej veľkosti zostala latencia v poriadku, kým CPU aj pamäť boli už na 100 %, čo nenecháva rezervu na mesačné porovnanie ani na nával požiadaviek.
+</Panel>

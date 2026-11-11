@@ -1,0 +1,85 @@
+---
+title: Lookup
+description: GET /v1/lookup/{id} by IČO, DIČ or IČ DPH, and what each section of the answer means.
+seo:
+  title: Look up a Slovak company by IČO, DIČ or IČ DPH
+---
+
+```http
+GET /v1/lookup/{id}
+```
+
+`id` is an IČO (8 digits), a DIČ (10 digits) or an IČ DPH (`SK` + 10 digits). Anything else is
+`400 invalid_identifier`.
+
+| Looked up by | Returns |
+| --- | --- |
+| IČO | One subject. |
+| DIČ | The subject with that DIČ. A natural person without an IČO gets only `taxpayer` (DIČ, name, municipality), and only for an authenticated key on an instance without anonymous access. |
+| IČ DPH | Every subject registered under it: one, or several for a VAT group. |
+
+## Example
+
+```json title="GET /v1/lookup/99900001 (shortened)" {7-8,24,29}
+{
+  "type": "ico",
+  "subjects": [
+    {
+      "ico": "99900001",
+      "identity": {
+        "state": "present",
+        "source": { "dataset": "rpo", "asOf": "2026-11-10", "version": "4f2a…", "stale": false },
+        "name": "Zlatá Rybka, s.r.o.",
+        "kind": "legal_person",
+        "legalForm": "Spoločnosť s ručením obmedzeným",
+        "establishedOn": "2020-01-01",
+        "active": true,
+        "address": { "street": "Testovacia", "buildingNumber": "1/1", "postalCode": "999 99", "municipality": "Fiktívne Mesto", "country": "Slovenská republika" },
+        "registrations": [
+          { "register": "Obchodný register", "registerCode": "1", "office": "Okresný súd Fiktívny", "number": "Sro/1/F", "validFrom": "2020-01-01", "name": "Zlatá Rybka, s.r.o.", "active": true }
+        ],
+        "icoChecksumValid": true
+      },
+      "tax": { "state": "present", "source": { "dataset": "ds_dsrdp", "asOf": "2026-11-10", "version": "…", "stale": false }, "dic": "2099900001" },
+      "vat": {
+        "state": "present",
+        "source": { "dataset": "ds_dphs", "asOf": "2026-11-10", "version": "…", "stale": false },
+        "icDph": "SK2099900001", "paragraph": "§4", "payer": true, "registeredOn": "2020-08-01", "payerFrom": "2020-08-01"
+      },
+      "risk": { "state": "present", "source": { "dataset": "ds_iz_ran,ds_dphz,ds_dphv,ds_dpho", "asOf": "2026-11-10", "stale": false }, "reliabilityIndex": "spoľahlivý" }
+    }
+  ],
+  "attribution": ["Register právnických osôb, Ministerstvo vnútra SR, CC BY 4.0", "Zdroj údajov: Finančná správa SR"]
+}
+```
+
+The highlighted lines are the ones to read first: each section's `state` and `source` (how sure the answer is and
+as of when), the VAT paragraph with `payer`, and the attribution you must show with the data.
+
+## Sections
+
+| Section | Source | Holds |
+| --- | --- | --- |
+| `identity` | RPO | Display name, kind, legal form, dates, address, every registration, the IČO check-digit warning. |
+| `tax` | `ds_dsrdp` | DIČ. |
+| `vat` | `ds_dphs` | IČ DPH, paragraph, payer, dates. See [VAT status](/concepts/vat). |
+| `risk` | `ds_iz_ran`, `ds_dphz`, `ds_dphv`, `ds_dpho` | Reliability index and risk-list entries. |
+
+Each section has a `state` (`present`, `absent`, `unknown`) and a `source` with the dataset, its `asOf` date,
+`changedAt`, a content `version` and a `stale` flag. See [Freshness and certainty](/concepts/freshness).
+
+## The register entry on documents
+
+`identity.registrations[]` gives the court and the oddiel/vložka (Commercial Register) or the office and the number
+(Trade Register), so a consumer can pre-fill a supplier's legal line. Let the user confirm it. Building the
+genitive form of the court name and the exact wording is the consumer's job.
+
+## Status codes
+
+| Code | When |
+| --- | --- |
+| `200` | Found (some sections may be `unknown` or `stale`). |
+| `400` | Not an identifier. |
+| `403` | A natural person by DIČ on an instance with anonymous access. |
+| `404` | Not found, and every consulted source is fresh. |
+| `503` | Not found while a source is stale (`source_stale`), or the mirror is not built yet (`bootstrapping`). |

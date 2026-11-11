@@ -3,13 +3,19 @@
 | Document | What it holds |
 | --- | --- |
 | [decisions.md](decisions.md) | The maintainers' decisions (binding) |
+| [self-hosting.md](self-hosting.md) | Running an instance: requirements, compose, roles, monitoring, GDPR duties |
+| [objection-invariants.md](objection-invariants.md) | The contract of the objection model: the rules a change or a review is checked against |
+| [configuration.md](configuration.md) | Commands and environment variables implemented so far |
 | [architecture.md](architecture.md) | v1 design: data model, API, sync pipeline, personal data, deployment |
 | [sources.md](sources.md) | Sources, URLs, licences, file layouts, quirks, measured volumes |
 | [open-questions.md](open-questions.md) | What is still open |
+| [mcp.md](mcp.md) | The MCP adapter for AI agents: design and contract (D36) |
+| [publication-checklist.md](publication-checklist.md) | GitHub settings and checks for making the repository public |
 | [measurement-spike.md](measurement-spike.md) | The measurement plan and pass thresholds |
+| [spike-results.md](spike-results.md) | Measured results of the spike (2026-11-10) and the proposed design changes |
+| [stability.md](stability.md) | The stability policy: versions, what is a contract, breaking changes, deprecation (D43) |
+| [managed-postgres-results.md](managed-postgres-results.md) | Compatibility and capacity on PlanetScale Postgres with the real data (2026-11-11, OQ-21) |
 
-To write before v0.1:
-- `self-hosting.md`: environment variables, hardware, upgrades, backups, GDPR responsibilities.
-- `CONTRIBUTING.md`: DCO; AI-assisted development is stated openly.
-- `SECURITY.md`.
-- `CODE_OF_CONDUCT.md`.
+These are the design and project documents. The user-facing documentation site (English and Slovak, with the API
+reference generated from `api/openapi.yaml`) lives in [`site/`](../site) and is built with Blume.
+

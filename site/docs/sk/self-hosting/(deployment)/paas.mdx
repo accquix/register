@@ -1,0 +1,83 @@
+---
+title: Coolify, Dokploy a podobné
+sidebar:
+  label: Coolify a Dokploy
+description: Nasadenie na platforme, ktorá spúšťa Docker Compose z Git repozitára, so všetkými tajomstvami v nastaveniach prostredia platformy.
+---
+
+Platformy ako Coolify, Dokploy alebo stacky v Portaineri spúšťajú súbor Docker Compose z Git repozitára a tajomstvá
+držia vo vlastných nastaveniach. Nevedia spustiť `make-secrets.sh`, preto referenčné nasadenie
+[docker compose](/sk/self-hosting/docker-compose), ktoré číta súbory s tajomstvami, im nevyhovuje.
+`deploy/paas/compose.yaml` je to isté riešenie nastavené výlučne cez premenné prostredia.
+
+Hodí sa najmä vtedy, keď už server na niečo iné prevádzkujete: register pridá asi 2,5 GB na disku, náročnejšiu
+prvú synchronizáciu asi na 15 minút a potom už veľmi málo.
+
+| Služba | Spúšťa | Životný cyklus |
+| --- | --- | --- |
+| `postgres` | PostgreSQL 18 | Beží trvalo, s kontrolou zdravia |
+| `roles` | Vytvorí alebo aktualizuje štyri databázové roly | Raz pri každom nasadení, ako superpoužívateľ |
+| `migrate` | `accquix-register migrate` | Raz pri každom nasadení |
+| `setup` | Jeden príkaz operátora z `REGISTER_SETUP_COMMAND` | Raz pri každom nasadení; predvolene `version` |
+| `sync` | `accquix-register sync --every 1h` | Beží trvalo |
+| `serve` | `accquix-register serve` na porte 8080 | Beží trvalo, za proxy platformy |
+
+## Postup
+
+<Steps>
+  <Step title="Pridajte zdroj">
+    Vytvorte zdroj typu Docker Compose z repozitára (alebo vášho forku) so súborom `deploy/paas/compose.yaml`.
+    Obraz sa zostaví zo zdrojového kódu; keď bude existovať vydaný obraz, nastavte `REGISTER_IMAGE`.
+  </Step>
+  <Step title="Nastavte premenné">
+    Mená premenných skopírujte z `deploy/paas/.env.example` do nastavení prostredia platformy:
+
+    ```sh
+    openssl rand -hex 32      # jedna hodnota pre každé z piatich hesiel
+    key=$(openssl rand -hex 24); echo "API kľúč: $key"
+    printf 'default:%s\n' "$(printf %s "$key" | shasum -a 256 | cut -d' ' -f1)"   # REGISTER_API_KEYS
+    ```
+
+    | Premenná | Hodnota |
+    | --- | --- |
+    | `POSTGRES_PASSWORD` | Superpoužívateľ; používa ho len služba `roles` |
+    | `REGISTER_MIGRATE_PASSWORD`, `REGISTER_SYNC_PASSWORD`, `REGISTER_OPERATOR_PASSWORD`, `REGISTER_API_PASSWORD` | Jedno pre každú rolu |
+    | `REGISTER_API_KEYS` | `meno:sha256hex`, odtlačok každého API kľúča; samotný kľúč uložte inde |
+    | `REGISTER_SETUP_COMMAND` | `suppress --init-empty`, len pre prvé nasadenie |
+
+    Používajte hexadecimálne hodnoty: heslá idú do URL spojení tak, ako sú.
+  </Step>
+  <Step title="Nasmerujte doménu">
+    Nasmerujte doménu na službu `serve`, port `8080`, s TLS z platformy. Na portoch hostiteľa sa nič nezverejňuje.
+  </Step>
+  <Step title="Nasaďte a odstráňte príkaz setup">
+    Prvé nasadenie potvrdí, že ide o novú inštaláciu bez námietok na obnovenie; dovtedy API odpovedá
+    `503 reason=setup`. **Potom `REGISTER_SETUP_COMMAND` vymažte.** Ak by zostal, pri ďalšom nasadení neškodne
+    zlyhá, no po opätovne zostavenej databáze by potvrdil „žiadne námietky“ bez toho, aby to niekto skontroloval.
+  </Step>
+  <Step title="Počkajte na prvú synchronizáciu">
+    `GET /readyz` odpovie `ready`, keď sú zverejnené všetky zdroje, približne po 15 minútach.
+  </Step>
+</Steps>
+
+## Príkazy operátora
+
+`REGISTER_SETUP_COMMAND` spustí raz ľubovoľný príkaz `accquix-register` s rolou operátora, no jeho výstup skončí
+v logoch platformy, kam identifikátor z námietky nepatrí. Používajte ho len na `suppress --init-empty`. Námietky a
+ich zálohy spúšťajte zo shellu servera, v Docker sieti projektu (jej meno ukáže platforma), s heslom operátora:
+
+```sh
+mkdir -p backup && chmod 777 backup     # obraz beží ako uid 65532
+docker run --rm --network <sieť projektu> -v "$PWD/backup:/backup" \
+  -e REGISTER_OPERATOR_DATABASE_URL="postgres://register_operator:<heslo>@postgres:5432/register?sslmode=disable" \
+  <obraz> suppress --export --output /backup/objections.tsv --overwrite
+```
+
+Rovnako sa spúšťa `suppress --subject …`, `--undo` alebo `--restore /backup/objections.tsv`. Čo ktorý robí, je v
+[Prevádzke](/sk/self-hosting/operations). Obraz nemá shell, takže `docker exec … sh` nefunguje.
+
+## Spoločný existujúci PostgreSQL
+
+Ak chcete namiesto služby `postgres` použiť PostgreSQL, ktorý na serveri už beží, vytvorte samostatnú databázu a
+roly z [Databázy](/sk/self-hosting/database#roly) a nasmerujte na ňu štyri URL premennými z
+[Konfigurácie](/sk/self-hosting/configuration). Synchronizácia musí mať priame spojenie, nikdy nie cez PgBouncer.

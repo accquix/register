@@ -1,0 +1,55 @@
+---
+title: Aktuálnosť a istota
+description: Stavy častí odpovede, neaktuálne dáta, kedy API povie „nenájdené“ a verzie častí.
+---
+
+Zrkadlo môže zaostávať. Accquix Register nikdy nezmení „neviem“ na „neexistuje“.
+
+## Stavy častí
+
+Každá časť overenia má `state`:
+
+| Stav | Význam |
+| --- | --- |
+| <State is="present" /> | Zdroj má k subjektu záznam. |
+| <State is="absent" /> | Zdroj je **aktuálny** a záznam nemá. Je to fakt k dátumu zdroja. |
+| <State is="unknown" /> | Zdroj ešte nebol zverejnený alebo je neaktuálny. Register to nevie. |
+
+Rovnako sa správajú aj hodnoty odvodené od časti. Napríklad `vat.payer` je `true` alebo `false` iba z aktuálneho
+zoznamu, inak `null`.
+
+## Aktuálne a neaktuálne
+
+Každý zdroj nesie dátum, ktorým úrad označil svoje dáta (`asOf`). Zdroj je **neaktuálny**, keď je tento dátum
+starší ako:
+
+| Zdroj | Najväčší vek |
+| --- | --- |
+| RPO | 3 dni |
+| Zoznamy Finančnej správy | 2 dni |
+| Index spoľahlivosti (`ds_iz_ran`) | 14 dní (aktualizuje sa nepravidelne) |
+
+Neaktuálna časť sa aj tak vráti, s `source.stale: true`. `GET /v1/sources` ukáže stav a dátum každého zdroja.
+
+## „Nenájdené“ len vtedy, keď to platí
+
+| Situácia | Odpoveď |
+| --- | --- |
+| Všetky použité zdroje sú aktuálne a žiaden identifikátor nemá | `404 not_found` |
+| Nenájdené, ale niektorý použitý zdroj je neaktuálny | `503 unavailable`, dôvod `source_stale` |
+| Zrkadlo sa ešte buduje | `503 unavailable`, dôvod `bootstrapping` |
+| Nájdené, niektoré časti neaktuálne | `200`, tieto časti označené `stale` |
+
+`503` a `unknown` berte ako „neznáme“, nikdy ako „nenájdené“. Výpadok registra nesmie zablokovať vašu prácu.
+
+## Verzie
+
+Každá časť má `source.version`: odtlačok svojho obsahu. Opätovné zostavenie zo zdrojov dá rovnaké verzie, takže si
+klient môže verziu uložiť a neskôr ju porovnať, aby videl, čo sa zmenilo. Pozrite
+[Sledovanie zmien](/sk/api/changes).
+
+## Žiadna história
+
+Register drží aktuálny stav, čas poslednej zmeny riadku (`changedAt`) a čas, keď riadok zo zoznamu zmizol
+(`absent_since`). Zmiznutie je pozorovanie, nikdy právny dátum: napríklad Finančná správa nezverejňuje dátum zrušenia
+registrácie pre DPH a platiteľ, ktorý registráciu stratí, zo zoznamu jednoducho zmizne.

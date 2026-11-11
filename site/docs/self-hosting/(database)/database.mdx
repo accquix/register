@@ -1,0 +1,106 @@
+---
+title: Database
+description: Roles, connections, managed PostgreSQL providers, and the one table you must back up.
+sidebar:
+  label: Overview
+---
+
+## Roles
+
+Separate roles keep each process to its job. Create them as an administrator before `migrate`:
+
+```sql
+CREATE ROLE register_migrate  LOGIN PASSWORD '…';   -- owns the schema, runs migrate
+CREATE ROLE register_sync     LOGIN PASSWORD '…';   -- sync
+CREATE ROLE register_operator LOGIN PASSWORD '…';   -- suppress (objections)
+CREATE ROLE register_api      LOGIN PASSWORD '…';   -- serve
+
+ALTER DATABASE register OWNER TO register_migrate;
+GRANT CONNECT ON DATABASE register TO register_sync, register_operator, register_api;
+GRANT TEMPORARY ON DATABASE register TO register_sync, register_operator;
+ALTER ROLE register_api SET default_transaction_read_only = on;
+ALTER ROLE register_api SET statement_timeout = '10s';
+```
+
+Then run `migrate` with the role names. It grants each role exactly the table rights it needs, after every
+migration:
+
+```sh
+REGISTER_DB_ROLE_API=register_api REGISTER_DB_ROLE_SYNC=register_sync \
+REGISTER_DB_ROLE_OPERATOR=register_operator accquix-register migrate
+```
+
+| Role | May | May not |
+| --- | --- | --- |
+| API | read the mirror, the search layer and which keys are suppressed | read the reasons or history of objections; write anything |
+| sync | write the mirror and the search layer; read the objections | add, change or revoke an objection |
+| operator | add and revoke objections; confirm the installation | write register data |
+
+The docker compose deployment does all of this for you, so no register process connects as the superuser.
+PostgreSQL 16, 17 and 18 are tested.
+
+Then point each mode at its role:
+
+| Variable | Role | Connection |
+| --- | --- | --- |
+| `REGISTER_MIGRATE_DATABASE_URL` | `register_migrate` | Direct |
+| `REGISTER_SYNC_DATABASE_URL` | `register_sync` | **Direct** (advisory lock, COPY, temporary tables) |
+| `REGISTER_OPERATOR_DATABASE_URL` | `register_operator` | **Direct** |
+| `REGISTER_DATABASE_URL` | `register_api` | Direct or a transaction pooler |
+
+Never give `serve` a role that can write. Use `sslmode=verify-full` for managed databases.
+
+### The API connection pool
+
+`serve` opens at most **10** connections, unless the connection string sets `pool_max_conns`. When the database is
+not next to the API, this pool, not the database, can set the limit: one search runs several queries in a row, so at
+20 ms per round trip each connection carries about 7 searches a second. Set the size in the connection string,
+within the database's connection limit:
+
+```sh
+REGISTER_DATABASE_URL='postgresql://…@host:6432/register?sslmode=verify-full&pool_max_conns=12'
+```
+
+The instance runs at most as many data requests at once as it has connections. When it is full, a new request waits
+a quarter of a second and then gets `503` with `reason: overloaded` and `Retry-After`, so the admitted requests
+keep their speed instead of everyone timing out together.
+
+Through a transaction pooler such as PgBouncer, the client connections do not each hold a server connection: in the
+test on [PlanetScale Postgres](/self-hosting/planetscale), 21 client connections used at most 16 on the server.
+
+## Managed providers
+
+| Provider | Notes |
+| --- | --- |
+| PlanetScale Postgres | Tested with the real data; see [PlanetScale Postgres](/self-hosting/planetscale). |
+| Neon | Works. On Launch plans the database has no IP allow-list, so rely on TLS and the role passwords. |
+| Supabase, RDS, plain PostgreSQL | Work as they are. |
+
+## Size and growth
+
+About 2.3 GB of data with indexes, growing with the registers (a few percent a year). The word dictionary used by
+fuzzy search adds about 10 MB.
+
+## Back up the objections
+
+The register data needs no backup: it can always be rebuilt from the official sources. Section versions are content
+hashes, so after a rebuild your consumers see the same versions and no false changes.
+
+The objections are different: they are your own data, and no source can restore them. If they are lost, every person
+who objected silently returns to name search. Dropping the database, `docker compose down -v` and
+`migrate down-to 0` all delete them.
+
+```sh
+accquix-register suppress --export --output objections.tsv --overwrite   # after every change, and on a schedule
+accquix-register suppress --restore objections.tsv                       # on a rebuilt database
+```
+
+- The export is written atomically, needs `--overwrite` to replace a file, and never replaces one with an empty
+  export. Do not redirect `suppress --list` into a file: the shell empties the file before the command runs.
+- Keep the file encrypted and away from the database: it lists the people who objected. Its last line holds a row
+  count and a checksum, so a restore refuses a damaged file. That is integrity, not authenticity: whoever can change
+  the file can recompute the checksum.
+- After a rebuild the API answers `503` with `reason: setup` until you run `suppress --restore`, or
+  `suppress --init-empty` on a new installation with no objections. An empty database cannot tell the two apart, so
+  the register does not guess.
+- If you lost both the database and every copy of the backup, the register cannot recover the objections.

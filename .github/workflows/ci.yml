@@ -1,0 +1,223 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17", "18"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      REGISTER_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: go mod tidy is clean
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: go build ./cmd/accquix-register
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
+        with:
+          version: v2.15
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  fuzz:
+    # The seed inputs of every fuzz target run in the test job; this job also fuzzes each parser
+    # of untrusted input for a short time, so a new crash shows up in the pull request.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: fuzz each target for 20 s
+        run: |
+          fuzz() { go test "$1" -run '^$' -fuzz "$2" -fuzztime 20s; }
+          fuzz ./internal/normalize FuzzFold
+          fuzz ./internal/normalize FuzzSplitName
+          fuzz ./internal/normalize FuzzClassify
+          fuzz ./internal/sources/rpo 'FuzzDecoder$'
+          fuzz ./internal/sources/rpo FuzzDecoderGzip
+          fuzz ./internal/sources/fs FuzzDecoder
+          fuzz ./cmd/accquix-register FuzzReadObjections
+      - name: keep the failing inputs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/**"
+
+  image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: build the image
+        run: docker build -t accquix-register:scan .
+      - name: scan the image (fails on a HIGH or CRITICAL vulnerability that has a fix)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: accquix-register:scan
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: "start postgres, migrate and serve (no sync: no downloads in CI)"
+        working-directory: deploy/compose
+        run: |
+          ./make-secrets.sh > /dev/null
+          docker compose up -d --build postgres migrate serve
+          for _ in $(seq 1 60); do curl -fs localhost:8080/livez && break; sleep 2; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/livez)" = 200
+          # no data yet: not ready, and the API refuses without a key
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/readyz)" = 503
+          test "$(curl -s -o /dev/null -w '%{http_code}' 'localhost:8080/v1/search?q=x')" = 401
+          test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = 0
+      - name: "roles: no register process is a superuser, and each role is held to its job"
+        working-directory: deploy/compose
+        run: |
+          sql() { docker compose exec -T postgres psql -U postgres -d register -At -c "$1"; }
+          test "$(sql "select count(*) from pg_roles where rolname like 'register\_%' and (rolsuper or rolcreaterole or rolcreatedb or rolbypassrls)")" = 0
+          test "$(sql "select count(*) from pg_roles where rolname in ('register_migrate','register_sync','register_operator','register_api')")" = 4
+          # Connect the way the services do: from another container, over the network, with the
+          # password from the secret file (the database container itself trusts local connections).
+          as() { docker run --rm --network accquix-register_default postgres:18 psql "$(cat "secrets/$1")" -At -v ON_ERROR_STOP=1 -c "$2"; }
+          must_fail() { if as "$1" "$2"; then echo "::error::$1 was allowed: $2"; exit 1; fi; }
+          test "$(as database_url 'select count(*) from sync_source')" = 0
+          test "$(as sync_database_url 'select count(*) from objection')" = 0
+          test "$(as operator_database_url 'select count(*) from objection')" = 0
+          must_fail database_url "select reason from objection"
+          must_fail database_url "insert into objection (ico) values ('99900001')"
+          must_fail database_url "set default_transaction_read_only = off; delete from search_name where skey = 'x'"
+          must_fail database_url "create table t (x int)"
+          must_fail database_url "copy (select 1) to program 'id'"
+          must_fail sync_database_url "insert into objection (ico) values ('99900001')"
+          must_fail sync_database_url "select reason from objection"
+          must_fail sync_database_url "select released_reason from objection_record"
+          must_fail sync_database_url "update register_setup set objections_confirmed_at = now() where only_row"
+          must_fail operator_database_url "update rpo_record set name = 'x' where id = 1"
+          if docker run --rm --network accquix-register_default postgres:18 psql "postgres://register_api:wrong@postgres:5432/register?sslmode=disable" -c 'select 1'; then
+            echo "::error::a wrong password was accepted"; exit 1
+          fi
+      - name: "setup: nothing is served until the operator confirms the objections"
+        working-directory: deploy/compose
+        run: |
+          docker compose run --rm -T operator suppress --init-empty
+          docker compose run --rm -T operator suppress --subject 99900001 --reason ci
+          # export to the host, as an operator would, and read the file back
+          mkdir -p backup && chmod 777 backup
+          docker compose run --rm -T -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv
+          test "$(sudo cat backup/objections.tsv | wc -l | tr -d " ")" = 2
+          sudo grep -q '^99900001' backup/objections.tsv
+          sudo grep -q "^#accquix-register-objections-v3$(printf '\t')1$(printf '\t')" backup/objections.tsv
+          # an existing backup is never replaced without --overwrite
+          if docker compose run --rm -T -v "$PWD/backup:/backup" operator suppress --export --output /backup/objections.tsv; then echo "::error::a backup was overwritten"; exit 1; fi
+          if docker compose run --rm -T operator suppress --init-empty; then echo "::error::init-empty ran twice"; exit 1; fi
+      - name: logs on failure
+        if: failure()
+        working-directory: deploy/compose
+        run: docker compose logs
+
+  paas-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: "start the environment-only stack (no sync: no downloads in CI)"
+        working-directory: deploy/paas
+        run: |
+          for v in POSTGRES_PASSWORD REGISTER_MIGRATE_PASSWORD REGISTER_SYNC_PASSWORD REGISTER_OPERATOR_PASSWORD REGISTER_API_PASSWORD; do
+            echo "$v=$(openssl rand -hex 32)" >> .env
+          done
+          echo "REGISTER_API_KEYS=default:$(printf %s ci-key | sha256sum | cut -d' ' -f1)" >> .env
+          echo "REGISTER_SETUP_COMMAND=suppress --init-empty" >> .env
+          docker compose up -d --build postgres roles migrate setup serve
+          for _ in $(seq 1 60); do test "$(docker compose ps -a setup --format '{{.State}}')" = exited && break; sleep 2; done
+          test "$(docker compose ps -a roles --format '{{.ExitCode}}')" = 0
+          test "$(docker compose ps -a migrate --format '{{.ExitCode}}')" = 0
+          test "$(docker compose ps -a setup --format '{{.ExitCode}}')" = 0
+          test "$(docker compose exec -T postgres psql -U postgres -d register -At -c 'select objections_confirmed_as from register_setup')" = new
+          test "$(docker compose exec -T postgres psql -U postgres -d register -At -c "select count(*) from pg_roles where rolname like 'register\_%' and (rolsuper or rolcreaterole or rolcreatedb or rolbypassrls)")" = 0
+          code() { docker run --rm --network accquix-register_default curlimages/curl:8.11.1 -s -o /dev/null -w '%{http_code}' "$@"; }
+          for _ in $(seq 1 30); do test "$(code http://serve:8080/livez)" = 200 && break; sleep 2; done
+          test "$(code http://serve:8080/livez)" = 200
+          test "$(code http://serve:8080/readyz)" = 503
+          test "$(code 'http://serve:8080/v1/search?q=x')" = 401
+      - name: "a leftover setup command fails instead of confirming twice; roles rerun cleanly"
+        working-directory: deploy/paas
+        run: |
+          docker compose up -d roles setup
+          for _ in $(seq 1 30); do test "$(docker compose ps -a setup --format '{{.State}}')" = exited && break; sleep 2; done
+          test "$(docker compose ps -a setup --format '{{.ExitCode}}')" = 1
+          test "$(docker compose ps -a roles --format '{{.ExitCode}}')" = 0
+      - name: logs on failure
+        if: failure()
+        working-directory: deploy/paas
+        run: docker compose logs
+
+  demo-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: "the demo starts with fictional data and says so"
+        run: |
+          docker compose -f deploy/demo/compose.yaml up -d --build --wait serve
+          test "$(docker compose -f deploy/demo/compose.yaml ps -a demo --format '{{.ExitCode}}')" = 0
+          curl -fsS localhost:8080/readyz | grep -q demo
+          curl -fsS 'localhost:8080/v1/search?q=zlata' | grep -q 'DEMO DATA'
+          curl -fsS localhost:8080/v1/capabilities | grep -q '"demo":true'
+          if docker compose -f deploy/demo/compose.yaml run --rm --no-deps demo sync; then echo 'sync accepted a demo database' >&2; exit 1; fi
+      - name: "the release's deployment archive is complete and its compose files are valid"
+        run: |
+          sh deploy/package.sh 0.0.0-ci "$RUNNER_TEMP/pkg"
+          tar -C "$RUNNER_TEMP/pkg" -xzf "$RUNNER_TEMP/pkg/accquix-register-deploy_0.0.0-ci.tar.gz"
+          d="$RUNNER_TEMP/pkg/accquix-register-deploy_0.0.0-ci"
+          if grep -q 'build:' "$d"/*/compose.yaml; then echo 'a build section was left' >&2; exit 1; fi
+          grep -q 'ghcr.io/accquix/register:0.0.0-ci' "$d/compose/compose.yaml"
+          docker compose -f "$d/demo/compose.yaml" config -q
+      - name: logs on failure
+        if: failure()
+        run: docker compose -f deploy/demo/compose.yaml logs

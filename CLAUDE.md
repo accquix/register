@@ -1,7 +1,7 @@
 # Accquix Register: rules for agents
 
 Accquix Register is an **open-source, self-hosted** service. It mirrors Slovak public business
-registers (RPO, the Financial Administration lists, RÚZ) into PostgreSQL and serves a small
+registers (RPO and the Financial Administration lists) into PostgreSQL and serves a small
 read-only HTTP API: one smart search box, and a lookup by IČO, DIČ or IČ DPH. It is a standalone
 public project. Licence: Apache-2.0.
 
@@ -9,10 +9,10 @@ public project. Licence: Apache-2.0.
 be. Never commit anything about a particular operator's infrastructure, private repositories,
 customers, credentials or internal plans. Keep that in the operator's own private repository.
 
-**Status (2026-11-10):** design phase. **Implementation has not been approved yet.** Do not write
-application code, migrations or CI until the maintainers explicitly say to start.
-Docs, research and the measurement spike (once approved, see `docs/measurement-spike.md`) are
-allowed.
+**Status (2026-11-10):** **implementation approved** (D30), following
+[docs/architecture.md](docs/architecture.md). Develop and test in isolation: no production
+deployments, and never touch any consumer's databases. Before the first production use, OQ-2,
+OQ-16 and OQ-21 must be done.
 
 Read before any work:
 
@@ -40,6 +40,10 @@ Read before any work:
   - Never stored: residence when it differs from the place of business, birth data, statutory
     bodies, stakeholders, representatives.
   - Logs never contain the search query or identifier values.
+- **Identifiers are exact.** Never match an IČO, DIČ or IČ DPH fuzzily. The IČO check digit is a
+  warning only. An IČ DPH can belong to several subjects (VAT groups).
+- **VAT status:** §7 and §7a are registered but are not payers; `payerFrom` is null for them. A
+  boolean such as `vat.payer` is `true`/`false` only from fresh data, otherwise `null`.
 - **Licences.**
   - Attribution is part of every API response: RPO is CC BY 4.0; "Zdroj údajov: Finančná správa
     SR".

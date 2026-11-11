@@ -1,0 +1,147 @@
+---
+title: Accquix Register
+sidebar:
+  label: Introduction
+description: Your own searchable copy of the Slovak business registers, with a small API for search and lookup. Open source, self-hosted, no subscription.
+mode: custom
+seo:
+  title: Open-source API for Slovak business registers
+---
+
+<Hero
+  eyebrow="Open source · Apache-2.0 · self-hosted"
+  title="Slovak business registers in your own PostgreSQL"
+  lead="Accquix Register mirrors the Register of Legal Entities and the Financial Administration lists into your database and serves one smart search box and a lookup by IČO, DIČ or IČ DPH. No per-request fees, no one else's quota."
+>
+  <LinkButton href="/quickstart">Quick start</LinkButton>
+  <LinkButton href="/reference" variant="secondary">API reference</LinkButton>
+  <LinkButton href="https://github.com/accquix/register" variant="secondary">GitHub</LinkButton>
+</Hero>
+
+<Section>
+  <Stats>
+    <Stat value="1–5 ms" label="typical search on the real data" />
+    <Stat value="≈1 million" label="active companies and sole traders" />
+    <Stat value="7 sources" label="RPO and six Financial Administration lists" />
+    <Stat value="≈100/s" label="searches on a 1/4 vCPU managed database" />
+  </Stats>
+</Section>
+
+<Section title="Running in three commands" lead="Docker with compose, about 10 GB of disk and outbound HTTPS. The first sync takes 7–20 minutes, mostly downloading.">
+
+```sh
+git clone https://github.com/accquix/register && cd register/deploy/compose
+./make-secrets.sh        # random passwords and one API key, printed once
+docker compose up -d     # PostgreSQL, migrate, API on :8080, hourly sync
+```
+
+Just looking? `docker compose -f deploy/demo/compose.yaml up` serves the same API over fictional data in seconds,
+with nothing to download: see [Try the demo](/quickstart#try-the-demo). Or let your AI agent do it: copy the prompt on the [Quick start](/quickstart) page. For integrating the API into
+your application, there is a prompt on [Integrating an application](/api/integration).
+
+</Section>
+
+<Section title="Run it where you already are" lead="One container for the API, one scheduled job for the sync, and any PostgreSQL 16–18.">
+  <CardGroup cols={2}>
+    <Card title="Docker compose" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg>' href="/self-hosting/docker-compose">
+      The whole stack on one machine.
+    </Card>
+    <Card title="Coolify and Dokploy" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M4.364 4.364V0h17.454v4.364zm0 13.09H0V4.365h4.364zm0 0h17.454v4.364H4.364ZM6.545 6.546v-1.7H22.3V2.182H24v4.363zm0 0v10.4h-1.7v-10.4ZM3.882 17.936v1.7h-1.7v-1.7ZM24 24H6.545v-1.7H22.3v-2.664H24Z"/></svg>' href="/self-hosting/paas">
+      A compose variant for your own PaaS.
+    </Card>
+    <Card title="AWS" icon="cloud" href="/self-hosting/aws">
+      ECS Fargate with RDS for PostgreSQL.
+    </Card>
+    <Card title="PlanetScale Postgres" icon='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:block"><path d="M0 12C0 5.373 5.373 0 12 0c4.873 0 9.067 2.904 10.947 7.077l-15.87 15.87a11.981 11.981 0 0 1-1.935-1.099L14.99 12H12l-8.485 8.485A11.962 11.962 0 0 1 0 12Zm12.004 12L24 12.004C23.998 18.628 18.628 23.998 12.004 24Z"/></svg>' href="/self-hosting/planetscale">
+      Tested with the real data, with measured sizes.
+    </Card>
+  </CardGroup>
+</Section>
+
+<Section title="What it costs to run" lead="No licence fee and no per-request price: you pay only for the infrastructure, and it is small.">
+  <Stats>
+    <Stat value="0 €" label="extra on a server you already run: about 1 GB RAM and 10 GB disk" />
+    <Stat value="≈$14/mo" label="a managed database with room to spare (PlanetScale PS-10, Frankfurt)" />
+    <Stat value="≈$41/mo" label="the same with high availability, for checkout-critical use" />
+    <Stat value="≈30/s" label="searches a PS-10 serves with headroom; about 85 at the limit" />
+  </Stats>
+
+Provider prices of November 2026, before tax and excluding the container that runs the API. See
+[PlanetScale Postgres](/self-hosting/planetscale#sizes) for the measured sizes, and check the providers' current
+prices.
+</Section>
+
+<Section title="For applications and AI agents" lead="Your code calls the REST API; agents you do not build, such as Claude or Cursor, can use MCP.">
+  <CardGroup cols={2}>
+    <Card title="REST API" icon="code" href="/reference">
+      A versioned OpenAPI 3.1 contract: generate a client in any language.
+    </Card>
+    <Card title="AI agents (MCP)" icon="bot" href="/api/mcp">
+      A read-only MCP endpoint with the same keys, limits and logging rules.
+    </Card>
+  </CardGroup>
+</Section>
+
+<Section title="Find your way">
+  <CardGroup cols={2}>
+    <Card title="Quick start" icon="rocket" href="/quickstart">
+      Run the whole stack and make your first search and lookup.
+    </Card>
+    <Card title="How it works" icon="workflow" href="/concepts/how-it-works">
+      Sources, the sync, the search layer and the API, and what each guarantees.
+    </Card>
+    <Card title="Using the API" icon="code" href="/api/search">
+      Search, lookup, change detection, errors and limits, with examples.
+    </Card>
+    <Card title="Self-hosting" icon="server" href="/self-hosting/requirements">
+      Docker compose, Coolify, AWS, PlanetScale or any PostgreSQL; roles and operations.
+    </Card>
+  </CardGroup>
+</Section>
+
+<Section title="Why it exists">
+
+The data is public but scattered across agencies, and the commercial APIs charge per request or per year. The
+free Statistical Office API that many tools used stopped answering when the Register of Legal Entities moved to
+the Ministry of the Interior in June 2026. Accquix Register reads the official bulk files directly, so your
+instance depends on no one's quota.
+
+</Section>
+
+<Section title="What you get">
+
+- **A mirror of the official sources** in your PostgreSQL:
+  - the Register of Legal Entities (RPO) of the Ministry of the Interior: names, addresses, legal forms,
+    registrations (court, oddiel and vložka, or the trade licensing office and number);
+  - the Financial Administration lists: DIČ, IČ DPH and VAT paragraph, the reliability index and the risk lists.
+- **Daily updates** that can be interrupted at any moment and resume cleanly.
+- **One search box** for a name, IČO, DIČ or IČ DPH. It ignores diacritics and word order, matches the start of
+  any word, shows the full address of each candidate, and can optionally correct typos.
+- **A lookup** that returns each part of the answer with its source, its as-of date and a version for change
+  detection, and says honestly when it does not know: every section is <State is="present" />,
+  <State is="absent" /> or <State is="unknown" />.
+- **One Go binary** and plain PostgreSQL 16–18, including managed providers.
+
+</Section>
+
+<Section title="What it is not">
+
+- **No data is published by this project.** Your instance downloads the data from the official sources, and you
+  are the controller of your copy under GDPR. See [Data and privacy](/project/data-and-privacy).
+- **No public hosted API.** Run your own.
+- **No history.** The register keeps the current state of each record and when it last changed.
+- **Not a VAT validity oracle.** It reports what the Financial Administration lists say, and as of when. For EU
+  VAT numbers, query VIES yourself.
+
+</Section>
+
+<Section title="Status">
+
+**Release candidate `1.0.0-rc.1`.** The API and the other contracts are frozen for 1.0.0, under the
+[stability policy](/api/stability). It is verified on the real data, including load tests on managed PostgreSQL. The
+first monthly reconcile against a new RPO snapshot, around 5 December 2026, is the last check before 1.0.0.
+
+It is built and maintained by [Accquix](https://accquix.com) and published under the Apache-2.0 licence so that
+anyone can run it.
+
+</Section>

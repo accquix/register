@@ -1,0 +1,103 @@
+---
+title: AI agents (MCP)
+description: Connect Claude, Cursor and other MCP clients to your own instance through a read-only MCP endpoint, with the same keys, limits and rules as the REST API.
+---
+
+Your instance can serve the [Model Context Protocol](https://modelcontextprotocol.io), so an AI agent can search and
+look up Slovak businesses on its own. It is **off by default** and **read-only**. Every tool call goes through the
+REST API in the same process, so an agent gets exactly what a program gets, under the same API key, rate limit and
+logging rules.
+
+There is no central server: your agents talk to your instance, and nothing reaches the Accquix maintainers. For an
+agent you build yourself, calling the [REST API](/api/search) with your own tool definitions is usually simpler; MCP
+is for agents you do not build, such as Claude Desktop, Claude Code or Cursor.
+
+## Turn it on
+
+```sh
+REGISTER_MCP=true    # serve /mcp next to /v1
+```
+
+`GET /v1/capabilities` then reports `"mcp": { "enabled": true, "path": "/mcp" }`. The endpoint speaks Streamable HTTP
+without sessions: `POST /mcp`, one JSON answer per request.
+
+## Tools
+
+| Tool | Does | Same as |
+| --- | --- | --- |
+| `search_subjects` | Candidates for a name, IČO, DIČ or IČ DPH; `mode` `fuzzy` only when enabled | `GET /v1/search` |
+| `lookup_subject` | The subject with its sections, states and as-of dates | `GET /v1/lookup/{id}` |
+| `get_data_freshness` | The state and as-of date of every source | `GET /v1/sources` |
+
+Each result carries the REST body as structured content, plus a short summary that ends with the attribution. The
+tool descriptions teach the agent the rules a developer would read here: a search result is a candidate, not a fact;
+<State is="unknown" /> is never "not found"; §7 and §7a are registered but not VAT payers; an IČ DPH can belong to
+several subjects. A `503` becomes a tool error that says so in words, so the agent cannot mistake an outage for
+"not found".
+
+The exact tool list, with every schema, is committed as `api/mcp-tools.json`.
+
+## Connect a client
+
+<Prompt description="Let your AI agent **connect** the register's MCP tools to your client." actions={["copy"]}>
+Connect the Accquix Register MCP server to this AI client.
+
+- The instance is at `https://register.example.internal` (ask me for the real address). Check `GET /v1/capabilities` with `Authorization: Bearer <key>`: it must show `"mcp": { "enabled": true }`. If it does not, tell me to set `REGISTER_MCP=true` on the instance and stop.
+- If this client speaks Streamable HTTP (for example Claude Code or Cursor), add a server named `accquix-register` with the URL `<instance>/mcp` and the header `Authorization: Bearer <key>`. Read the key from an environment variable; never write it into a file that is committed.
+- If this client only starts local servers over stdio (for example Claude Desktop), use the command `accquix-register mcp --url <instance>` with the key in the `REGISTER_MCP_KEY` environment variable.
+- List the tools: expect `search_subjects`, `lookup_subject` and `get_data_freshness`, all read-only. Run one search to check, and show me the answer.
+</Prompt>
+
+<Tabs>
+  <Tab title="Claude Code">
+    ```sh
+    claude mcp add --transport http accquix-register https://register.example.internal/mcp \
+      --header "Authorization: Bearer $REGISTER_KEY"
+    ```
+  </Tab>
+  <Tab title="Cursor">
+    In `.cursor/mcp.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "accquix-register": {
+          "url": "https://register.example.internal/mcp",
+          "headers": { "Authorization": "Bearer ${env:REGISTER_KEY}" }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Claude Desktop">
+    Claude Desktop starts local servers over stdio, so use the local adapter. It forwards every call to your
+    instance's REST API and never touches the database. In `claude_desktop_config.json`:
+
+    ```json
+    {
+      "mcpServers": {
+        "accquix-register": {
+          "command": "accquix-register",
+          "args": ["mcp", "--url", "https://register.example.internal"],
+          "env": { "REGISTER_MCP_KEY": "<your API key>" }
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Give each agent its own API key: the key name appears in the logs and has its own rate-limit bucket.
+
+## Security
+
+- **Read-only.** No tool can change data, objections or settings, and none will be added.
+- **The same keys and limits as REST.** A missing or wrong key gets HTTP `401`; a tool call costs one request of
+  the caller's budget. Anonymous instances keep their limits, including no natural-person lookup by DIČ.
+- **Browser pages are refused.** A request from a web page of another origin gets `403`, against DNS rebinding.
+  Allow specific origins with `REGISTER_MCP_ALLOWED_ORIGINS` only if you build a browser client yourself.
+- **Logs.** The `/mcp` request and one line per tool call with its name and status; never the query, the identifier
+  or the result.
+- **Data, not instructions.** Business names in results come from public registers. The server tells the agent to
+  treat them as data, but an agent that acts on its own (sends mail, pays invoices) should still confirm with a
+  person.

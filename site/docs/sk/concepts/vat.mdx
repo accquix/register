@@ -1,0 +1,41 @@
+---
+title: Stav DPH
+description: Čo uvádza časť DPH, prečo subjekty podľa §7 a §7a nie sú platiteľmi DPH a ako to uvádzať na dokladoch.
+seo:
+  title: Platiteľ DPH, registrácia podľa §7 a §7a
+---
+
+Časť `vat` pochádza zo zoznamu subjektov registrovaných pre DPH, ktorý vedie Finančná správa (`ds_dphs`).
+
+| Pole | Význam |
+| --- | --- |
+| `icDph` | IČ DPH. Členovia skupiny DPH (§4b) zdieľajú jedno. |
+| `paragraph` | `§4`, `§4b`, `§5`, `§7` alebo `§7a`: druh registrácie. |
+| `payer` | `true` pre §4, §4b a §5; `false` pre §7 a §7a; `false`, keď aktuálny zoznam záznam nemá; `null`, keď to nie je známe. |
+| `registeredOn` | Dátum registrácie. |
+| `payerFrom` | Dátum, odkedy je subjekt platiteľom DPH. **Pri §7 a §7a vždy `null`.** |
+| `typeChangedOn` | Kedy sa naposledy zmenil druh registrácie, ak sa zmenil. |
+
+## §7 a §7a sú registrovaní, ale nie platitelia DPH
+
+Subjekty registrované podľa §7 (nadobúdanie tovaru z iného členského štátu) alebo §7a (cezhraničné služby) sú
+registrované pre DPH, ale **nie sú** platiteľmi DPH. Zoznam Finančnej správy im dátum „platiteľ od“ vôbec neuvádza:
+v reálnych dátach je `PLAT_DPH_OD` prázdny pri každom z nich.
+
+:::warning[Na faktúrach]
+„Platiteľ DPH od …“ uvádzajte iba vtedy, keď je `vat.payer` `true`. Subjekt podľa §7 a §7a má IČ DPH, ale nie je
+platiteľom DPH.
+:::
+
+## Čo register neuvádza
+
+- **Dátum zrušenia registrácie.** Zrušený platiteľ zo zoznamu jednoducho zmizne. Register riadok označí ako chýbajúci
+  s dátumom, keď si to všimol; je to pozorovanie, nie právny dátum.
+- **Platnosť pre iné štáty EÚ.** Pýtajte sa priamo VIES; jeho podmienky zakazujú zrkadlenie.
+- **Zoznam môže zaostávať najviac o deň.** Uvádzajte „podľa zoznamu Finančnej správy k `asOf`“.
+
+## Rizikové zoznamy
+
+Časť `risk` spája index spoľahlivosti (`ds_iz_ran`: vysoko spoľahlivý, spoľahlivý, menej spoľahlivý) a záznamy v
+zozname platiteľov DPH s dôvodmi na zrušenie registrácie (`ds_dphz`), vyradenia z neho (`ds_dphv`) a osobitnej
+úprave (`ds_dpho`).

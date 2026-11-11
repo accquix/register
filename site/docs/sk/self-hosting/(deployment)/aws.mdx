@@ -1,0 +1,100 @@
+---
+title: AWS
+description: Referenčné rozloženie na ECS Fargate s RDS for PostgreSQL a nástrahy špecifické pre AWS.
+---
+
+Táto stránka opisuje časti a ich nastavenia, nie hotovú šablónu: každý účet AWS má vlastnú sieť, pomenovanie aj
+nástroje. Prepíšte ju do Terraformu, CloudFormation, CDK alebo konzoly podľa toho, čo používate.
+
+## Rozloženie
+
+| Časť | Služba AWS | Nastavenia |
+| --- | --- | --- |
+| Databáza | RDS for PostgreSQL 16–18 alebo externý poskytovateľ | `db.t4g.small` alebo väčšia, 20 GB gp3. Dáta zaberú asi 2,3 GB. |
+| `serve` | Služba ECS na Fargate za Application Load Balancerom | 0,25 vCPU, 0,5 GB, jedna alebo viac úloh. |
+| `sync` | Úloha ECS na Fargate spúšťaná cez EventBridge Scheduler | 0,5 vCPU, 1 GB, rozvrh `rate(1 hour)`. |
+| `migrate` | Rovnaká definícia úlohy ako `sync`, spustená raz pri každom vydaní | Príkaz `migrate` s rolou pre migrácie. |
+| Tajomstvá | Secrets Manager | Jedno tajomstvo pre každú databázovú rolu a odtlačky API kľúčov. |
+| Logy | CloudWatch Logs (`awslogs`) | Logy neobsahujú mená, dopyty ani identifikátory. |
+
+Namiesto plánovanej úlohy môže `sync` bežať ako služba ECS s jednou úlohou a príkazom `sync --every 1h`. Obe možnosti
+sú správne; plánovaná úloha medzi behmi nič nestojí.
+
+## Postup
+
+<Steps>
+  <Step title="Databáza">
+    Vytvorte inštanciu v privátnych podsieťach. `pg_trgm` je na RDS dostupné bez zmeny parametrov. Raz sa pripojte
+    ako hlavný používateľ a vytvorte tri roly z [Databázy](/sk/self-hosting/database#roly). Hlavný používateľ RDS to
+    môže urobiť: nemusí byť skutočný superpoužívateľ.
+  </Step>
+  <Step title="Tajomstvá">
+    Uložte `REGISTER_MIGRATE_DATABASE_URL`, `REGISTER_SYNC_DATABASE_URL`, `REGISTER_DATABASE_URL` a
+    `REGISTER_API_KEYS` do Secrets Manager. Každej definícii úlohy dajte cez pole `secrets` kontajnera len tajomstvo,
+    ktoré jej príkaz potrebuje; rola na spúšťanie úloh potrebuje `secretsmanager:GetSecretValue` len na tieto
+    tajomstvá.
+  </Step>
+  <Step title="Migrácia">
+    Spustite jednorazovú úlohu s príkazom `migrate` a tajomstvom pre migrácie a počkajte na návratový kód 0.
+  </Step>
+  <Step title="Synchronizácia">
+    Vytvorte rozvrh. Prvý beh stiahne celý snapshot RPO a trvá asi 15 minút; ďalšie behy trvajú sekundy až niekoľko
+    minút. Prekrývajúci sa štart hneď skončí, takže dlhý prvý beh sa s ďalším nikdy nezrazí.
+  </Step>
+  <Step title="API">
+    Vytvorte službu a load balancer s TLS na listeneri. API odpovedá `503`, kým prvá synchronizácia nezverejní všetky
+    zdroje.
+  </Step>
+</Steps>
+
+## Definície kontajnerov
+
+Podstatné časti, zástupné hodnoty sú v lomených zátvorkách:
+
+```json
+{
+  "name": "sync",
+  "image": "<image>",
+  "command": ["sync"],
+  "secrets": [
+    { "name": "REGISTER_SYNC_DATABASE_URL", "valueFrom": "<sync secret ARN>" }
+  ],
+  "environment": [
+    { "name": "REGISTER_WORK_DIR", "value": "/tmp/accquix-register" }
+  ],
+  "logConfiguration": { "logDriver": "awslogs", "options": { "awslogs-group": "<group>", "awslogs-region": "<region>", "awslogs-stream-prefix": "sync" } }
+}
+```
+
+```json
+{
+  "name": "serve",
+  "image": "<image>",
+  "command": ["serve"],
+  "portMappings": [{ "containerPort": 8080 }],
+  "secrets": [
+    { "name": "REGISTER_DATABASE_URL", "valueFrom": "<api secret ARN>" },
+    { "name": "REGISTER_API_KEYS", "valueFrom": "<api keys secret ARN>" }
+  ]
+}
+```
+
+## Nástrahy
+
+| Nástraha | Čo urobiť |
+| --- | --- |
+| **Kontrola zdravia load balancera na `/readyz`.** `/readyz` vracia `503`, kým sa prvá synchronizácia neskončí, takže cieľová skupina označí všetky úlohy za nezdravé a ECS ich v slučke nahrádza. | Pre kontrolu zdravia cieľovej skupiny použite **`/livez`**. `/readyz` a `/v1/sources` sledujte v monitorovaní. |
+| **Kontrola zdravia kontajnera.** Obraz je distroless: nemá shell ani `curl`, takže kontrola `CMD-SHELL` vždy zlyhá. | Kontrolu zdravia kontajnera vynechajte a spoľahnite sa na load balancer. |
+| **RDS Proxy pre `sync`.** Proxy pripína alebo narúša advisory lock a COPY. | `REGISTER_SYNC_DATABASE_URL` nasmerujte na koncový bod inštancie. `serve` môže proxy používať. |
+| **`sslmode=verify-full` na RDS.** Certifikáty RDS podpisuje certifikačná autorita RDS, ktorá nie je v úložisku dôveryhodných certifikátov obrazu, takže spojenie zlyhá. | Zostavte odvodený obraz s [balíkom CA RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html) a do URL pridajte `sslrootcert=<cesta>`, alebo v privátnej VPC použite `sslmode=require`. |
+| **Koreňový súborový systém len na čítanie.** S `readonlyRootFilesystem` nemôže `sync` zapisovať do pracovného priečinka. | Pripojte zväzok úlohy (stačí dočasné úložisko) a nasmerujte naň `REGISTER_WORK_DIR`. |
+| **App Runner alebo Lambda pre `sync`.** Obe zastavia prácu, ktorá nie je požiadavkou; prvá synchronizácia beží asi 15 minút. | Pre `sync` použite úlohy ECS. |
+| **Žiadny odchádzajúci internet.** Úlohy v privátnych podsieťach bez NAT brány alebo verejnej IP sa k zdrojom nedostanú. | Pridajte NAT bránu alebo spúšťajte úlohy vo verejných podsieťach s verejnou IP a prísnou bezpečnostnou skupinou. |
+| **Externá databáza so zoznamom povolených IP.** Úlohy na Fargate dostávajú meniace sa adresy. | Smerujte prevádzku cez NAT bránu s Elastic IP a povoľte túto adresu. |
+
+## Aktualizácie
+
+1. Zverejnite novú značku obrazu.
+2. Spustite úlohu `migrate` s novým obrazom a počkajte na návratový kód 0.
+3. Aktualizujte obe definície úloh na nový obraz. Ďalší plánovaný `sync` ho použije; `serve` sa nasadí cez nasadenie
+   ECS.

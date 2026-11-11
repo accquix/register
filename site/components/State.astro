@@ -1,0 +1,12 @@
+---
+// Section state of a lookup answer (D24), shown with Blume's built-in Badge:
+// present = success, absent = neutral, unknown = warning.
+import Badge from "blume/components/content/Badge.astro";
+
+interface Props {
+  is: "present" | "absent" | "unknown";
+}
+const { is } = Astro.props;
+const variant = { present: "success", absent: "default", unknown: "warning" } as const;
+---
+<Badge variant={variant[is]} size="sm">{is}</Badge>
