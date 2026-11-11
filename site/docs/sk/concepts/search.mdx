@@ -35,7 +35,9 @@ nenašlo a používateľ o to požiada, napríklad tlačidlom „Hľadať s prek
   </Step>
   <Step title="Neznáme slová sa opravia">
     Každé neznáme slovo sa porovná so slovníkom všetkých slov v registri: najprv podľa trigramov, potom podľa
-    editačnej vzdialenosti so zámenou susedných písmen. `sporitelan` → `sporitelna` je jedna zámena.
+    editačnej vzdialenosti so zámenou susedných písmen. `sporitelan` → `sporitelna` je jedna zámena. Slovo do štyroch
+    písmen môže mať jeden preklep, dlhšie dva; krátke slovo sa porovná so všetkými slovami vzdialenými o jednu úpravu,
+    lebo má na prvý krok priveľa málo trigramov.
   </Step>
   <Step title="Hľadá sa s opravami">
     Opravené slová prejdú predvoleným vyhľadávaním podľa slov. Odpoveď uvádza opravy.
@@ -65,3 +67,5 @@ S oneskorením na strane klienta približne 120 ms pošle píšuci človek jedno
 - Fyzické osoby bez IČO (daňovníci známi len podľa DIČ) nie sú vo vyhľadávaní nikdy.
 - Subjekt vyradený z vyhľadávania po námietke sa stále nájde podľa presného identifikátora.
 - Výsledkov je najviac 20; stránkovanie v1 nemá.
+- Skloňované tvary sú iné slová: `lipa` nenájde „U Lipy“. Napíšte začiatok slova (`lip`) alebo použite približné
+  vyhľadávanie na jedno zmenené písmeno.

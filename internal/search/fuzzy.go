@@ -99,17 +99,28 @@ func (s *Searcher) corrections(ctx context.Context, w string, last bool) ([]stri
 		return nil, 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, "SET LOCAL pg_trgm.similarity_threshold = 0.3"); err != nil {
-		return nil, 0, err
-	}
 	// A correction is offered only when a subject that is not suppressed uses the word: the
 	// dictionary must never reveal a word (a surname) that only suppressed subjects carry.
-	rows, err := tx.Query(ctx, `SELECT c.word, c.freq FROM (
+	const inUse = `EXISTS (SELECT 1 FROM search_token t JOIN search_name n ON n.skey = t.skey WHERE t.token = c.word
+  AND ` + NotSuppressed + `)`
+	wr := []rune(w)
+	var rows pgx.Rows
+	if len(wr) <= 4 {
+		// A short word has too few trigrams: one typo drops its similarity below any useful
+		// threshold ("plsu" and "plus" share 0.25). Every word one edit away is looked up exactly
+		// instead, a few hundred primary-key reads (OQ-16).
+		rows, err = tx.Query(ctx, `SELECT c.word, c.freq FROM search_word c WHERE c.word = ANY($1) AND `+inUse+`
+ORDER BY c.freq DESC`, editVariants(wr))
+	} else {
+		if _, err := tx.Exec(ctx, "SET LOCAL pg_trgm.similarity_threshold = 0.3"); err != nil {
+			return nil, 0, err
+		}
+		rows, err = tx.Query(ctx, `SELECT c.word, c.freq FROM (
   SELECT word, freq, similarity(word, $1) AS sim FROM search_word WHERE word % $1
   ORDER BY sim DESC, freq DESC LIMIT 60) c
-WHERE EXISTS (SELECT 1 FROM search_token t JOIN search_name n ON n.skey = t.skey WHERE t.token = c.word
-  AND `+NotSuppressed+`)
+WHERE `+inUse+`
 ORDER BY c.sim DESC, c.freq DESC`, w)
+	}
 	if err != nil {
 		return nil, 0, err
 	}
@@ -126,7 +137,6 @@ ORDER BY c.sim DESC, c.freq DESC`, w)
 	if err != nil {
 		return nil, 0, err
 	}
-	wr := []rune(w)
 	best := maxTypos(w) + 1
 	for i := range cands {
 		r := []rune(cands[i].word)
@@ -176,4 +186,50 @@ func OSA(a, b []rune) int {
 		prev2, prev, cur = prev, cur, prev2
 	}
 	return prev[len(b)]
+}
+
+// editVariants returns every word one edit (deletion, adjacent transposition, substitution or
+// insertion) away from w, over the letters and digits of folded names: a–z, 0–9 and the letters
+// of w itself.
+func editVariants(w []rune) []string {
+	alphabet := []rune("abcdefghijklmnopqrstuvwxyz0123456789")
+	for _, r := range w {
+		if !strings.ContainsRune(string(alphabet), r) {
+			alphabet = append(alphabet, r)
+		}
+	}
+	seen := map[string]bool{}
+	add := func(r []rune) {
+		if len(r) >= 2 {
+			seen[string(r)] = true
+		}
+	}
+	for i := range w {
+		add(append(append([]rune{}, w[:i]...), w[i+1:]...)) // deletion
+		if i+1 < len(w) {
+			t := append([]rune{}, w...)
+			t[i], t[i+1] = t[i+1], t[i]
+			add(t) // transposition
+		}
+		for _, c := range alphabet {
+			if c != w[i] {
+				t := append([]rune{}, w...)
+				t[i] = c
+				add(t) // substitution
+			}
+		}
+	}
+	for i := 0; i <= len(w); i++ {
+		for _, c := range alphabet {
+			t := append(append(append([]rune{}, w[:i]...), c), w[i:]...)
+			add(t) // insertion
+		}
+	}
+	delete(seen, string(w))
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
 }

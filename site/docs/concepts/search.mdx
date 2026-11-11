@@ -35,7 +35,9 @@ asks for it, for example with a "Search with typos?" button.
   </Step>
   <Step title="Correct unknown words">
     Each unknown word is compared with the dictionary of all words in the register: first by trigrams, then by edit
-    distance with adjacent transpositions. `sporitelan` → `sporitelna` is one transposition.
+    distance with adjacent transpositions. `sporitelan` → `sporitelna` is one transposition. A word of up to four
+    letters may have one typo, a longer word two; a short word is checked against every word one edit away, since
+    it has too few trigrams for the first step.
   </Step>
   <Step title="Search with the corrections">
     The corrected words go through the default word search. The response lists the corrections.
@@ -65,3 +67,5 @@ When the database is saturated, a 1/8 vCPU tier answers about 30 default searche
 - Natural persons without an IČO (taxpayers known only by DIČ) are never in search.
 - A subject kept out of search after an objection is still found by its exact identifier.
 - Results are capped at 20; there is no paging in v1.
+- Inflected forms are different words: `lipa` does not find "U Lipy". Type the start of the word (`lip`), or use
+  fuzzy search for one changed letter.

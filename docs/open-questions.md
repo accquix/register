@@ -4,7 +4,7 @@ Record new questions here. Never decide them in code. When a question is answere
 to [decisions.md](decisions.md) with its date.
 
 OQ-1, 5–9, 11, 13–15 and 17–20 were answered on 2026-11-10 (D17–D30); OQ-30 on 2026-11-11 (D36). OQ-2, 16 and 21 must be done
-before the first production use (D30); OQ-3, 4, 10 and 12 are deferred. OQ-37 was answered on 2026-11-11 (D38). OQ-38–40 come from the managed PostgreSQL test of 2026-11-11; OQ-31, 38 and 39 were answered on 2026-11-11 (D39–D41), OQ-35 on 2026-11-11 (D43), OQ-41 on 2026-11-11 (D48), OQ-33 on 2026-11-11 (D49). OQ-25, 26 and 29 (security
+before the first production use (D30); OQ-3, 4, 10 and 12 are deferred. OQ-37 was answered on 2026-11-11 (D38). OQ-38–40 come from the managed PostgreSQL test of 2026-11-11; OQ-31, 38 and 39 were answered on 2026-11-11 (D39–D41), OQ-35 on 2026-11-11 (D43), OQ-41 on 2026-11-11 (D48), OQ-33 on 2026-11-11 (D49), OQ-16 on 2026-11-11 (D50). OQ-25, 26 and 29 (security
 review) were answered on 2026-11-10 (D31–D33).
 
 | ID | Question | Proposal |
@@ -14,7 +14,6 @@ review) were answered on 2026-11-10 (D31–D33).
 | OQ-4 | The new base URL of the RPO REST API under MV SR is undocumented. It is needed only for an on-demand refresh, because the bucket covers the mirror | Ask MV SR, or skip it |
 | OQ-10 | A live "check now" refresh through the FS Lists API (optional key) | v2 |
 | OQ-12 | Copyright holder in NOTICE: "The Accquix Register Authors" for now. Switch to the company name once the company exists? | Yes |
-| OQ-16 | **Search relevance test set** (exact name first, shorter names first, typos, same names of different subjects) | Synthetic fixtures in the repo; real-data checks run locally only |
 | OQ-21 | **Capacity on a 1/8–1/4 vCPU database.** Measured on PlanetScale on 2026-11-11, see [managed-postgres-results.md](managed-postgres-results.md): PS-20 (1/4 vCPU) about 100–110 default searches a second, PS-10 (1/8 vCPU) about 85, and 60 a second for 10 minutes at full CPU; PS-5 (1/16 vCPU) is at full CPU and memory already at 10 a second. The Docker estimate holds. Open: latency with the API in the same region (the test had about 20 ms per database round trip) | Measure in-region latency at the first production deployment, then close |
 | OQ-22 | **sqlc and gocron (D12) are not used.** The queries are dynamic or bulk (COPY, staged merges, the adaptive word step) and are covered by integration tests against PostgreSQL. Scheduling is `sync --every <interval>` (a loop under the advisory lock) or an external scheduler running `sync` | Drop sqlc and gocron from D12; keep pgx with integration tests |
 | OQ-23 | **`active=false` search and keyset `cursor` paging** (architecture v1) are not implemented: the search layer holds active subjects only, and results are capped at 20 | Defer to v1.1, if a consumer needs them |
