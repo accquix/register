@@ -116,6 +116,28 @@ route, status, duration and key name only.
 - **Crash safety:** every file is one transaction with a checkpoint; a killed pass resumes where it
   stopped.
 
+## Size limits on source files
+
+A source file is trusted to come from the state, not to be well-formed. A damaged or hostile file
+ends as a rejected unit (D23): the source is blocked with a diagnostic and the data stays. It never
+fills the disk or exhausts the memory. The limits are fixed in the code, with ample room over the
+real files ([sources.md](sources.md)):
+
+| What | Limit | Real size (2026-11) |
+| --- | --- | --- |
+| RPO snapshot part, download | 1 GiB | up to about 100 MB |
+| RPO daily file, download | 256 MiB | up to 2.3 MB |
+| RPO file after decompression | 8 GiB | about 0.5–1.2 GB a part |
+| One RPO record | 64 MiB | kilobytes |
+| Records in an RPO file | the part size / `REGISTER_RPO_DAILY_MAX_RECORDS` | 100 000 / about 2 000 |
+| FS export, download (ZIP) | 1 GiB | up to 57 MB |
+| Entries in an FS ZIP | 16 | 2 |
+| FS XML after decompression | 8 GiB | up to 399 MB |
+| One XML element / elements in an item / items | 1 MiB / 256 / 20 000 000 | bytes / about 10 / 1.4 M |
+
+A download is never longer than the bucket listed, and a record count over the limit stops the
+unit while the file is read, not after all of it was staged.
+
 ## How a sync pass behaves (FS lists)
 
 - Each list is independent: a conditional GET with the stored ETag (`304` → nothing to do); the

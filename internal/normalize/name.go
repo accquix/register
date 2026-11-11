@@ -13,7 +13,9 @@ import (
 // run of characters that are neither letters nor digits collapsed to one space.
 // "Slovenská sporiteľňa, a.s." becomes "slovenska sporitelna a s".
 func Fold(s string) string {
-	d := norm.NFD.String(s)
+	// Bytes that are not UTF-8 count as separators. Left in, they stop the decomposition of the
+	// letter after them, and the same name would fold differently on a second pass.
+	d := norm.NFD.String(strings.ToValidUTF8(s, " "))
 	var b strings.Builder
 	b.Grow(len(d))
 	space := true // suppress leading spaces

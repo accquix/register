@@ -227,6 +227,7 @@ func mapRow(slug string, m map[string]string) (Row, error) {
 
 // Decoder streams the items of one export.
 type Decoder struct {
+	lim  Limits
 	slug string
 	dec  *xml.Decoder
 	asOf time.Time
@@ -245,6 +246,10 @@ func Open(slug, path string) (*Decoder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zip: %w", err)
 	}
+	if len(zr.File) > MaxZipEntries {
+		_ = zr.Close()
+		return nil, fmt.Errorf("zip: %w: %d entries, the limit is %d", ErrTooLarge, len(zr.File), MaxZipEntries)
+	}
 	var entry *zip.File
 	for _, f := range zr.File {
 		if strings.HasSuffix(strings.ToLower(f.Name), ".xml") {
@@ -259,12 +264,72 @@ func Open(slug, path string) (*Decoder, error) {
 		_ = zr.Close()
 		return nil, errors.New("zip: no XML entry")
 	}
+	if entry.UncompressedSize64 > uint64(DefaultLimits.XML) {
+		_ = zr.Close()
+		return nil, fmt.Errorf("zip: %w: the XML is %d bytes, the limit is %d", ErrTooLarge, entry.UncompressedSize64, DefaultLimits.XML)
+	}
 	rc, err := entry.Open()
 	if err != nil {
 		_ = zr.Close()
 		return nil, err
 	}
-	return &Decoder{slug: slug, dec: xml.NewDecoder(rc), closer: multiCloser{rc, zr}}, nil
+	d := NewDecoder(slug, rc, Limits{})
+	d.closer = multiCloser{rc, zr}
+	return d, nil
+}
+
+// Limits bound what one export may cost before it is rejected: a damaged or hostile file must end
+// as a rejected list, never as a full disk or an out-of-memory kill. The defaults leave ample room
+// over the real lists (docs/sources.md: the largest ZIP is 57 MB and its XML 399 MB with 1.4 M
+// items; an item has about ten short fields).
+type Limits struct {
+	XML     int64 // bytes of XML after decompression
+	Element int   // bytes of one element's text
+	Fields  int   // elements in one ITEM
+	Items   int   // items in the list
+}
+
+// DefaultLimits are used by Open.
+var DefaultLimits = Limits{XML: 8 << 30, Element: 1 << 20, Fields: 256, Items: 20_000_000}
+
+// Limits of the ZIP itself.
+const (
+	MaxZipBytes   = 1 << 30 // the download
+	MaxZipEntries = 16      // a real export has two: the XML and its XSD
+)
+
+// ErrTooLarge marks an export over a limit.
+var ErrTooLarge = errors.New("over the size limit")
+
+type limitReader struct {
+	r        io.Reader
+	n, limit int64
+}
+
+func (l *limitReader) Read(p []byte) (int, error) {
+	n, err := l.r.Read(p)
+	if l.n += int64(n); l.n > l.limit {
+		// withhold the bytes: a decoder that got its data might never ask again
+		return 0, fmt.Errorf("%w: more than %d bytes of XML", ErrTooLarge, l.limit)
+	}
+	return n, err
+}
+
+// NewDecoder reads the XML of one export from r. Zero fields of lim take DefaultLimits.
+func NewDecoder(slug string, r io.Reader, lim Limits) *Decoder {
+	if lim.XML <= 0 {
+		lim.XML = DefaultLimits.XML
+	}
+	if lim.Element <= 0 {
+		lim.Element = DefaultLimits.Element
+	}
+	if lim.Fields <= 0 {
+		lim.Fields = DefaultLimits.Fields
+	}
+	if lim.Items <= 0 {
+		lim.Items = DefaultLimits.Items
+	}
+	return &Decoder{slug: slug, dec: xml.NewDecoder(&limitReader{r: r, limit: lim.XML}), lim: lim, closer: multiCloser{}}
 }
 
 type multiCloser []io.Closer
@@ -292,6 +357,9 @@ func (d *Decoder) text() (string, error) {
 		}
 		switch v := t.(type) {
 		case xml.CharData:
+			if b.Len()+len(v) > d.lim.Element {
+				return "", fmt.Errorf("%w: an element of more than %d bytes", ErrTooLarge, d.lim.Element)
+			}
 			b.Write(v)
 		case xml.StartElement:
 			if err := d.dec.Skip(); err != nil {
@@ -353,12 +421,19 @@ func (d *Decoder) Next() bool {
 						d.err = fmt.Errorf("item %d: %w", d.pos+1, err)
 						return false
 					}
-					m[f.Name.Local] = strings.TrimSpace(v)
+					if m[f.Name.Local] = strings.TrimSpace(v); len(m) > d.lim.Fields {
+						d.err = fmt.Errorf("item %d: %w: more than %d elements", d.pos+1, ErrTooLarge, d.lim.Fields)
+						return false
+					}
 					continue
 				}
 				if _, ok := t.(xml.EndElement); ok {
 					break
 				}
+			}
+			if d.pos >= d.lim.Items {
+				d.err = fmt.Errorf("%w: more than %d items", ErrTooLarge, d.lim.Items)
+				return false
 			}
 			r, err := mapRow(d.slug, m)
 			d.pos++
@@ -441,8 +516,12 @@ func (c *Client) Fetch(ctx context.Context, slug, etag, dir string) (Fetched, er
 		return Fetched{}, err
 	}
 	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, MaxZipBytes+1))
 	closeErr := f.Close()
+	if n > MaxZipBytes || resp.ContentLength > MaxZipBytes {
+		_ = os.Remove(path)
+		return Fetched{}, fmt.Errorf("%s: %w: the download is more than %d bytes", slug, ErrTooLarge, int64(MaxZipBytes))
+	}
 	if copyErr != nil {
 		return Fetched{}, fmt.Errorf("%s: %w", slug, copyErr)
 	}

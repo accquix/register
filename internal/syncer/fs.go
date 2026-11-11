@@ -95,6 +95,19 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 	}
 	dir := filepath.Join(s.cfg.WorkDir, "fs")
 	f, err := s.cfg.Client.Fetch(ctx, l.Slug, st.Cursor.ETag, dir)
+	if errors.Is(err, fs.ErrTooLarge) {
+		// a rejected unit (D23): the list is blocked with a diagnostic, the data stays
+		err = fmt.Errorf("%w: %w", ingest.ErrRejected, err)
+		if rerr := ingest.RecordRejected(ctx, s.conn, src+":too-large", src, "", err.Error()); rerr != nil {
+			return errors.Join(err, rerr)
+		}
+		st.PreviousState, st.State, st.Diagnostic = st.State, "blocked", err.Error()
+		if serr := save(ctx, s.conn, src, st); serr != nil {
+			return errors.Join(err, serr)
+		}
+		s.cfg.Log.Error("fs list blocked", "list", l.Slug, "diagnostic", st.Diagnostic)
+		return fmt.Errorf("%w: %s", ErrBlocked, st.Diagnostic)
+	}
 	if err != nil {
 		return err
 	}

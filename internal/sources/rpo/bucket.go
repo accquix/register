@@ -130,6 +130,9 @@ func (b *Bucket) ReadManifest(ctx context.Context, key string) ([]string, error)
 // Download fetches obj into dir and returns the local path. A partial file left by an earlier
 // attempt is resumed with a Range request. The final size must equal the listed size.
 func (b *Bucket) Download(ctx context.Context, obj Object, dir string) (string, error) {
+	if limit := maxObjectBytes(obj.Key); obj.Size > limit {
+		return "", fmt.Errorf("download %s: %w: the bucket lists %d bytes, the limit is %d", obj.Key, ErrTooLarge, obj.Size, limit)
+	}
 	path := localPath(obj, dir)
 	// Copies of other versions of this object are never reused: a partial or whole file is resumed
 	// or kept only when it belongs to the same content (the same ETag). Without an ETag nothing
@@ -218,7 +221,8 @@ func (b *Bucket) downloadOnce(ctx context.Context, obj Object, path string) erro
 	if err != nil {
 		return err
 	}
-	n, copyErr := io.Copy(f, resp.Body)
+	// never more than the listing promised (one byte over shows a longer body as a size mismatch)
+	n, copyErr := io.Copy(f, io.LimitReader(resp.Body, obj.Size-have+1))
 	closeErr := f.Close()
 	if copyErr != nil {
 		return copyErr
@@ -230,6 +234,20 @@ func (b *Bucket) downloadOnce(ctx context.Context, obj Object, path string) erro
 		return fmt.Errorf("%s: got %d bytes, want %d", obj.Key, have+n, obj.Size)
 	}
 	return nil
+}
+
+// Download limits, with headroom over the real files (docs/sources.md and the bucket on
+// 2026-11-11: a snapshot part is up to about 100 MB, a daily file up to 2.3 MB).
+const (
+	MaxPartBytes  = 1 << 30   // 1 GiB
+	MaxDailyBytes = 256 << 20 // 256 MiB
+)
+
+func maxObjectBytes(key string) int64 {
+	if reDaily.MatchString(key) {
+		return MaxDailyBytes
+	}
+	return MaxPartBytes
 }
 
 // ErrChanged means the object's content is not the one the listing described: the file was

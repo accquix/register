@@ -25,7 +25,7 @@ func (k Kind) String() string {
 	}
 }
 
-// compact removes spaces and upper-cases, so "sk 2020 411 536" becomes "SK2020411536".
+// compact removes spaces and upper-cases, so "sk 2099 900 001" becomes "SK2099900001".
 func compact(s string) string {
 	return strings.ToUpper(strings.Join(strings.Fields(s), ""))
 }

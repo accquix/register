@@ -414,7 +414,7 @@ func (s *RPO) apply(ctx context.Context, obj rpo.Object, path string, u ingest.R
 	var err error
 	if path == "" {
 		if path, err = s.cfg.Bucket.Download(ctx, obj, filepath.Join(s.cfg.WorkDir, "rpo")); err != nil {
-			return ingest.UnitResult{}, err
+			return ingest.UnitResult{}, s.tooLarge(ctx, u.Name, err)
 		}
 	}
 	if u.SHA256, err = fileSHA(path); err != nil {
@@ -479,6 +479,19 @@ func (s *RPO) dailyValidator() func(int) error {
 
 func unitName(obj rpo.Object) string { return "rpo:" + filepath.Base(obj.Key) }
 
+// tooLarge turns a download over the size limit into a rejected unit (D23): the source is
+// blocked with a diagnostic, instead of the same download failing on every pass.
+func (s *RPO) tooLarge(ctx context.Context, unit string, err error) error {
+	if !errors.Is(err, rpo.ErrTooLarge) {
+		return err
+	}
+	err = fmt.Errorf("%w: %w", ingest.ErrRejected, err)
+	if rerr := ingest.RecordRejected(ctx, s.conn, unit, "rpo", "", err.Error()); rerr != nil {
+		return errors.Join(err, rerr)
+	}
+	return err
+}
+
 // dateCheck validates a file's exportDate: never after tomorrow (time zones), and within
 // DateSkewDays of the date in the file name.
 func (s *RPO) dateCheck(obj rpo.Object) func(time.Time) error {
@@ -515,11 +528,11 @@ func (s *RPO) applyParts(ctx context.Context, parts []rpo.Object, refresh, markS
 	if len(todo) > 0 {
 		paths, err := s.cfg.Bucket.DownloadAll(ctx, todo, filepath.Join(s.cfg.WorkDir, "rpo"), s.cfg.Concurrency)
 		if err != nil {
-			return 0, err
+			return 0, s.tooLarge(ctx, "rpo:snapshot", err)
 		}
 		for k, p := range todo {
 			if _, err := s.apply(ctx, p, paths[k], ingest.RPOUnit{
-				Name: unitName(p), Rank: 1, RefreshSearch: refresh, MarkSeen: markSeen,
+				Name: unitName(p), Rank: 1, RefreshSearch: refresh, MarkSeen: markSeen, MaxRecords: s.cfg.PartRecords,
 				Validate: s.partValidator(idx[k], len(parts)),
 			}); err != nil {
 				return 0, err
@@ -606,7 +619,7 @@ func (s *RPO) bootstrap(ctx context.Context, st *State, inv rpo.Inventory) error
 		if done, err := ingest.Applied(ctx, s.conn, unitName(obj)); err != nil {
 			return err
 		} else if !done {
-			if _, err := s.apply(ctx, obj, "", ingest.RPOUnit{Name: unitName(obj), Rank: 0, Validate: s.dailyValidator()}); err != nil {
+			if _, err := s.apply(ctx, obj, "", ingest.RPOUnit{Name: unitName(obj), Rank: 0, MaxRecords: s.cfg.DailyMaxRecords, Validate: s.dailyValidator()}); err != nil {
 				return err
 			}
 		}
@@ -802,7 +815,7 @@ func (s *RPO) daily(ctx context.Context, st *State, inv rpo.Inventory) error {
 		}
 		date := next
 		if _, err := s.apply(ctx, obj, "", ingest.RPOUnit{
-			Name: unitName(obj), Rank: 0, RefreshSearch: true, Validate: s.dailyValidator(),
+			Name: unitName(obj), Rank: 0, RefreshSearch: true, MaxRecords: s.cfg.DailyMaxRecords, Validate: s.dailyValidator(),
 			After: func(ctx context.Context, tx pgx.Tx, _ ingest.UnitResult) error {
 				ns := *st
 				ns.State, ns.AppliedThrough, ns.PublishedAsOf, ns.Diagnostic = "daily", date, date, ""

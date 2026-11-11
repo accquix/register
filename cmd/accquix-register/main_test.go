@@ -233,3 +233,48 @@ func TestServeRefusesAnOldSchema(t *testing.T) {
 		t.Fatalf("old schema: %v", err)
 	}
 }
+
+// FuzzReadObjections: the backup reader never panics on any file, and whatever it accepts it can
+// write and read again to the same objections (a restore must not invent or lose one).
+func FuzzReadObjections(f *testing.F) {
+	at := time.Date(2026, 11, 10, 9, 30, 0, 0, time.UTC)
+	var good bytes.Buffer
+	_ = writeObjections(&good, []ingest.Objection{
+		{Key: "99900004", Reason: "ticket", CreatedAt: at, Links: []ingest.Link{{RecordID: 900000004, Basis: ingest.BasisAtObjection, CreatedAt: at, ReleasedAt: &at}}},
+		{Key: "r900000006", CreatedAt: at, RevokedAt: &at},
+	})
+	f.Add(good.Bytes())
+	f.Add([]byte(objectionTrailer + "\t0\te3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n"))
+	f.Add([]byte("99900004\t2026-11-10T09:30:00Z\t-\t[]\t\n"))
+	f.Add([]byte("99900004\t2026-11-10T09:30:00Z\t-\t[{\"record\":-1}]\tx\n" + objectionTrailer + "\t1\tx\n"))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		got, err := readObjections(bytes.NewReader(raw))
+		if err != nil {
+			return
+		}
+		for _, o := range got {
+			if !ingest.ValidObjectionKey(o.Key) || o.CreatedAt.IsZero() && o.CreatedAt.Year() != 1 {
+				t.Fatalf("an invalid objection was accepted: %+v", o)
+			}
+			for _, l := range o.Links {
+				if l.RecordID <= 0 {
+					t.Fatalf("an invalid link was accepted: %+v", l)
+				}
+			}
+		}
+		var buf bytes.Buffer
+		if err := writeObjections(&buf, got); err != nil {
+			t.Fatal(err)
+		}
+		again, err := readObjections(&buf)
+		if err != nil || len(again) != len(got) {
+			t.Fatalf("an accepted backup does not survive a round trip: %d -> %d, %v", len(got), len(again), err)
+		}
+		for i := range got {
+			if again[i].Key != got[i].Key || !again[i].CreatedAt.Equal(got[i].CreatedAt) || len(again[i].Links) != len(got[i].Links) ||
+				(again[i].RevokedAt == nil) != (got[i].RevokedAt == nil) {
+				t.Fatalf("objection %d changed in a round trip: %+v -> %+v", i, got[i], again[i])
+			}
+		}
+	})
+}

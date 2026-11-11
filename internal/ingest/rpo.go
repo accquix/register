@@ -28,6 +28,9 @@ type RPOUnit struct {
 	Open          func() (io.ReadCloser, error)
 	RefreshSearch bool // update the search layer for touched subjects
 	MarkSeen      bool // record ids in rpo_seen (reconcile)
+	// MaxRecords stops the unit as soon as the file holds more records (0 = no limit), instead of
+	// staging an oversized file whole and rejecting it afterwards.
+	MaxRecords int
 	// OrderDate is the date the order guard uses (src_date): the date in the file name, which is
 	// also the order the files are applied in. Zero means the file's exportDate. The exportDate is
 	// stored as source_as_of either way.
@@ -136,6 +139,7 @@ func ApplyRPO(ctx context.Context, conn *pgx.Conn, u RPOUnit) (UnitResult, error
 		return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, err)
 	}
 	res.ExportDate = dec.ExportDate()
+	dec.SetMaxRecords(u.MaxRecords)
 	if u.CheckDate != nil {
 		// The export date becomes src_date, which the order guard compares. A wrong date (above all a
 		// future one) would freeze the rows of this file against every later correction.
