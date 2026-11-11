@@ -1,10 +1,9 @@
 name: docs
 
-# Builds the documentation site (site/, Blume) on every pull request that touches it, and deploys
-# it to Cloudflare Pages from main. Deployment needs two repository secrets:
-#   CLOUDFLARE_API_TOKEN   a token with "Cloudflare Pages: Edit"
-#   CLOUDFLARE_ACCOUNT_ID  the account that owns the Pages project
-# Without them the site is still built and checked; the deploy step is skipped.
+# Builds and checks the documentation site (site/, Blume) on every pull request and push to main
+# that touches it. Cloudflare Workers Builds deploys the site itself from the repository (path
+# site, build command `npm ci && npx blume build`, deploy command `npx wrangler deploy`, served as
+# static assets per site/wrangler.jsonc), so this workflow holds no deploy credentials.
 
 on:
   pull_request:
@@ -15,9 +14,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  PAGES_PROJECT: accquix-register-docs
 
 jobs:
   build:
@@ -45,29 +41,3 @@ jobs:
           name: site
           path: site/dist
           retention-days: 7
-
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      deployments: write
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: site
-          path: dist
-      - name: skip without Cloudflare secrets
-        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
-        run: echo "::notice::Cloudflare secrets are not set; the site was built but not deployed."
-      - name: deploy to Cloudflare Pages
-        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
-        with:
-          apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ env.PAGES_PROJECT }} --branch=main
