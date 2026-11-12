@@ -86,6 +86,9 @@ components:
         anonymous:
           description: Anonymous access is enabled
           type: boolean
+        anonymousRate:
+          $ref: "#/components/schemas/RateLimit"
+          description: Per anonymous client IP, per instance; only when anonymous access is on
         apiVersion:
           type: string
         demo:
@@ -101,13 +104,16 @@ components:
           $ref: "#/components/schemas/CapabilitiesBodyMCPStruct"
           description: The read-only MCP adapter for AI agents
         rate:
-          $ref: "#/components/schemas/CapabilitiesBodyRateStruct"
-          description: Per caller, per instance
+          $ref: "#/components/schemas/RateLimit"
+          description: "Per API key, per instance; empty: no per-key limit (the default, set by the operator)"
         search:
           $ref: "#/components/schemas/CapabilitiesBodySearchStruct"
         taxpayerLookup:
-          description: Lookup of natural persons without an IČO by DIČ
+          description: "Lookup of natural persons without an IČO by exact DIČ: DIČ, name, municipality and the address the DIČ list publishes (D57)"
           type: boolean
+        taxpayerSearch:
+          $ref: "#/components/schemas/CapabilitiesBodyTaxpayerSearchStruct"
+          description: Name search for taxpayers without an IČO (D56), off by default
         version:
           type: string
       required:
@@ -115,6 +121,7 @@ components:
         - version
         - anonymous
         - taxpayerLookup
+        - taxpayerSearch
         - search
         - fuzzy
         - rate
@@ -125,6 +132,9 @@ components:
     CapabilitiesBodyFuzzyStruct:
       additionalProperties: false
       properties:
+        anonymousEvery:
+          description: One fuzzy search per anonymous client IP per this interval (burst 2); only when anonymous access is on
+          type: string
         concurrencyPerInstance:
           format: int64
           type: integer
@@ -133,6 +143,7 @@ components:
         note:
           type: string
         perKeyEvery:
+          description: "One fuzzy search per API key per this interval (burst 2); absent: no per-key limit"
           type: string
         timeout:
           type: string
@@ -150,19 +161,6 @@ components:
       required:
         - enabled
       type: object
-    CapabilitiesBodyRateStruct:
-      additionalProperties: false
-      properties:
-        burst:
-          format: int64
-          type: integer
-        perSecond:
-          format: double
-          type: number
-      required:
-        - perSecond
-        - burst
-      type: object
     CapabilitiesBodySearchStruct:
       additionalProperties: false
       properties:
@@ -179,6 +177,26 @@ components:
         - modes
         - limitMax
       type: object
+    CapabilitiesBodyTaxpayerSearchStruct:
+      additionalProperties: false
+      properties:
+        burst:
+          format: int64
+          type: integer
+        enabled:
+          type: boolean
+        match:
+          description: Every word of the name and no other, in any order; no prefixes, no fuzzy
+          enum:
+            - full_name
+          type: string
+        perSecond:
+          description: Taxpayer searches per API key per second; over it a search answers without taxpayers
+          format: double
+          type: number
+      required:
+        - enabled
+      type: object
     Card:
       additionalProperties: false
       properties:
@@ -187,14 +205,19 @@ components:
         address:
           $ref: "#/components/schemas/Address"
           description: The registered seat or place of business, as published in RPO
+        dic:
+          description: "kind taxpayer only: the taxpayer's DIČ"
+          type: string
         ico:
           type: string
         kind:
+          description: "taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayer search on (D56); the name, municipality and the address as the DIČ list publishes it (D57), as in the lookup; never on an instance with anonymous access"
           enum:
             - legal_person
             - sole_trader
             - public_body
             - other
+            - taxpayer
           type: string
         matchedName:
           description: The official name that matched, when it is not the display name
@@ -204,6 +227,9 @@ components:
         name:
           description: Display name, with diacritics and legal form
           type: string
+        stale:
+          description: "kind taxpayer only: the DIČ list this card comes from is not fresh"
+          type: boolean
         typos:
           description: "fuzzy only: corrections needed"
           format: int64
@@ -346,6 +372,16 @@ components:
         - status
         - code
       type: object
+    RateLimit:
+      additionalProperties: false
+      properties:
+        burst:
+          format: int64
+          type: integer
+        perSecond:
+          format: double
+          type: number
+      type: object
     Registration:
       additionalProperties: false
       properties:
@@ -424,6 +460,14 @@ components:
           type:
             - array
             - "null"
+        taxpayers:
+          description: "Only when the instance searches taxpayers without an IČO by name (D56): searched; not_searched (fuzzy mode, fewer than two words, or the businesses filled the limit: only a full name is matched, after the businesses); rate_limited (the results are without taxpayers, retry later); stale (the DIČ list is not fresh, so taxpayers were not searched: their absence means nothing)"
+          enum:
+            - searched
+            - not_searched
+            - rate_limited
+            - stale
+          type: string
       required:
         - mode
         - results
@@ -444,6 +488,14 @@ components:
       properties:
         diagnostic:
           type: string
+        items:
+          description: "Financial Administration lists: items of the published file kept, with an identifier"
+          format: int64
+          type: integer
+        itemsWithoutDic:
+          description: "DIČ list: items left out because they have an IČO and no DIČ yet (new businesses). Normal, with no limit"
+          format: int64
+          type: integer
         maxAgeDays:
           format: int64
           type: integer
@@ -451,7 +503,7 @@ components:
           description: Date the published data was stamped by the agency
           type: string
         skippedItems:
-          description: "Items of the published file left out: no identifier at all, or (in the DIČ list) an IČO without a DIČ yet. More than 100 blocks the list"
+          description: Items of the published file left out because they carry no identifier at all. Above the list's cap (0.05 % of the DIČ list, at most 1000; 0.01 % of the others, at most 100; never less than 10) the list is blocked
           format: int64
           type: integer
         source:
@@ -569,6 +621,9 @@ components:
     Taxpayer:
       additionalProperties: false
       properties:
+        address:
+          $ref: "#/components/schemas/Address"
+          description: The address as the Financial Administration's DIČ list publishes it (D57); the street field holds street and number together
         dic:
           type: string
         municipality:

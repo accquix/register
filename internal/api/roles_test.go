@@ -215,15 +215,19 @@ WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'p') AND c.relname <> 'go
 	}
 	t.Cleanup(pool.Close)
 	h, _ := api.New(pool, api.Config{Version: "test", Keys: api.Keys{api.HashKey(key): "tester"}, Fuzzy: true,
-		RatePerSecond: 1000, RateBurst: 1000, FuzzyEvery: time.Millisecond, FuzzyConcurrent: 1,
+		RatePerSecond: 1000, RateBurst: 1000, FuzzyEvery: time.Millisecond, FuzzyConcurrent: 1, SearchTaxpayers: true,
 		FuzzyTimeout: 2 * time.Second, QueryTimeout: 3 * time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	web := httptest.NewServer(h)
 	t.Cleanup(web.Close)
 	e := env{srv: web, dsn: dsn}
-	for _, p := range []string{"/v1/search?q=rybka", "/v1/search?mode=fuzzy&q=zlta", "/v1/lookup/99900001", "/v1/sources", "/readyz"} {
+	for _, p := range []string{"/v1/search?q=rybka", "/v1/search?mode=fuzzy&q=zlta", "/v1/lookup/99900001", "/v1/sources", "/readyz",
+		"/v1/search?q=fiktivna+osoba"} {
 		code, _, m := e.get(t, p, true)
 		if code != http.StatusOK {
 			t.Fatalf("API role: %s: %d %v", p, code, m)
+		}
+		if strings.Contains(p, "osoba") && m["taxpayers"] != "searched" { // D56: the function and objection_active.dic
+			t.Fatalf("API role: taxpayer search: %v", m)
 		}
 		if p == "/v1/search?q=rybka" && (len(names(m)) != 1 || !strings.Contains(names(m)[0], "Zlatá Rybka Plus")) {
 			t.Fatalf("API role: search must return the renamed subject and not the suppressed or absent ones: %v", names(m))
@@ -257,7 +261,7 @@ WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v', 'p') AND c.relname <> 'go
 	}
 	for _, sql := range []string{
 		`UPDATE rpo_record SET name = 'x' WHERE id = 1`, `DELETE FROM objection WHERE id = 1`, `TRUNCATE objection`,
-		`UPDATE objection SET created_at = now() WHERE id = 1`, `UPDATE objection SET reason = 'x' WHERE id = 1`, `UPDATE objection SET ico = '99900001' WHERE id = 1`,
+		`UPDATE objection SET created_at = now() WHERE id = 1`, `UPDATE objection SET reason = 'x' WHERE id = 1`, `UPDATE objection SET ico = '99900001' WHERE id = 1`, `UPDATE objection SET dic = '2099900001' WHERE id = 1`,
 		`DELETE FROM objection_record WHERE rpo_id = 1`, `UPDATE objection_record SET basis = 'at_objection' WHERE rpo_id = 1`,
 		`UPDATE sync_source SET state = 'empty' WHERE source = 'rpo'`, `INSERT INTO fs_vat_payer (vkey, ic_dph, paragraph, source_as_of, row_hash) VALUES ('x', 'SK2099999999', '§4', now(), '\x00')`,
 	} {

@@ -12,13 +12,15 @@ import (
 )
 
 // Objections (GDPR): a person asks to be left out of name search. Exact lookup by identifier is
-// not affected (D26). See migrations 00003 and 00005 for the model:
+// not affected (D26). See migrations 00003, 00005 and 00007 for the model:
 //
 //   - an objection is the person's request: a number, the key the operator named, when, and when
 //     it was revoked;
 //   - a link says that the objection covers one RPO record, with why and since when;
 //   - a release is the operator's exclusion of one link; it stays, so the sync does not link the
-//     record again.
+//     record again;
+//   - an objection by DIČ covers a taxpayer without an IČO (D56): it has no links and no search
+//     layer rows; the taxpayer name search checks it at query time.
 
 // Link bases.
 const (
@@ -26,6 +28,7 @@ const (
 	BasisCarriedICO  = "carried_ico"  // the sync saw the record carry the IČO later
 	BasisRestored    = "restored"     // put back from a backup
 	BasisMigrated    = "migrated"     // carried over by a schema migration
+	BasisDICList     = "dic_list"     // the DIČ list gave the objected DIČ the IČO the record carries (D56)
 )
 
 // Link is one link between an objection and an RPO record.
@@ -41,29 +44,44 @@ type Link struct {
 // Objection is one objection, as recorded and as exported.
 type Objection struct {
 	ID        int64
-	Key       string // what the operator named: an IČO, or "r<RPO id>" for one record
+	Key       string // what the operator named: an IČO, "r<RPO id>" for one record, or a DIČ
 	Reason    string // operator note, never personal data
 	CreatedAt time.Time
 	RevokedAt *time.Time // set by an undo; the row stays as its record
 	Links     []Link
+	// DICHasICO is set by ListObjections for an objection by DIČ whose taxpayer row now carries an
+	// IČO: the sync links the records with that IČO to the objection (basis dic_list).
+	DICHasICO string
 }
 
-var objectionKey = regexp.MustCompile(`^([0-9]{8}|r[1-9][0-9]{0,17})$`)
+var objectionKey = regexp.MustCompile(`^([0-9]{8}|[0-9]{10}|r[1-9][0-9]{0,17})$`)
 
-// ValidObjectionKey reports whether s is an IČO (8 digits) or "r<RPO id>".
+// ValidObjectionKey reports whether s is an IČO (8 digits), a DIČ (10 digits) or "r<RPO id>".
 func ValidObjectionKey(s string) bool { return objectionKey.MatchString(s) }
 
-// splitKey turns a key into the two nullable columns of the objection table.
-func splitKey(key string) (ico *string, rpoID *int64, err error) {
-	if !ValidObjectionKey(key) {
-		return nil, nil, fmt.Errorf("%q is not an IČO (8 digits) or r<RPO id>", key)
-	}
-	if key[0] == 'r' {
-		n, _ := strconv.ParseInt(key[1:], 10, 64)
-		return nil, &n, nil
-	}
-	return &key, nil, nil
+// objKey is a key split into the three nullable columns of the objection table; exactly one is set.
+type objKey struct {
+	ico   *string
+	rpoID *int64
+	dic   *string
 }
+
+func splitKey(key string) (objKey, error) {
+	if !ValidObjectionKey(key) {
+		return objKey{}, fmt.Errorf("%q is not an IČO (8 digits), a DIČ (10 digits) or r<RPO id>", key)
+	}
+	switch {
+	case key[0] == 'r':
+		n, _ := strconv.ParseInt(key[1:], 10, 64)
+		return objKey{rpoID: &n}, nil
+	case len(key) == 10:
+		return objKey{dic: &key}, nil
+	}
+	return objKey{ico: &key}, nil
+}
+
+// keyExpr is the key the operator named, in SQL, for alias-less objection rows.
+const keyExpr = `coalesce(ico, dic, 'r' || rpo_id)`
 
 // covered selects the records (alias r) that objection $1 has anything to do with: named, linked
 // (released or not) or carrying its IČO. Their subject keys are the search rows it can affect.
@@ -75,7 +93,7 @@ const hidden = `NOT (` + notSuppressed + `)`
 
 func refreshObjection(ctx context.Context, tx pgx.Tx, id int64) error {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT `+skeyExpr+` `+covered+`
-UNION SELECT coalesce(ico, 'r' || rpo_id) FROM objection WHERE id = $1`, id)
+UNION SELECT coalesce(ico, 'r' || rpo_id) FROM objection WHERE id = $1 AND dic IS NULL`, id)
 	if err != nil {
 		return err
 	}
@@ -94,15 +112,37 @@ type Coverage struct {
 
 func coverage(ctx context.Context, tx pgx.Tx, id int64) (Coverage, error) {
 	var c Coverage
+	var dic *string
+	if err := tx.QueryRow(ctx, `SELECT dic FROM objection WHERE id = $1`, id).Scan(&dic); err != nil {
+		return c, err
+	}
+	if dic != nil {
+		// a taxpayer without an IČO: the row of the DIČ list, hidden while any objection names it
+		err := tx.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM objection o WHERE o.dic = t.dic AND o.revoked_at IS NULL))
+FROM fs_tax_subject t WHERE t.dic = $1 AND t.ico IS NULL AND t.absent_since IS NULL`, *dic).Scan(&c.Records, &c.Hidden)
+		if err != nil {
+			return c, err
+		}
+		// and the RPO records linked to it since the DIČ list gave the DIČ an IČO (dic_list)
+		var records, hiddenNow int
+		err = tx.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE `+hidden+`) `+covered, id).Scan(&records, &hiddenNow)
+		c.Records, c.Hidden = c.Records+records, c.Hidden+hiddenNow
+		return c, err
+	}
 	err := tx.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE `+hidden+`) `+covered, id).Scan(&c.Records, &c.Hidden)
 	return c, err
 }
+
+// ErrDICHasICO refuses an objection by the DIČ of a subject that has an IČO: the subject is in RPO,
+// and the objection belongs on its IČO, where the operator sees what it covers. (A DIČ that gains
+// an IČO after the objection is linked to its records by the sync, basis dic_list.)
+var ErrDICHasICO = errors.New("this DIČ belongs to a subject with an IČO: object by its IČO")
 
 // AddObjection records an objection, links it to the records that carry its IČO now, and removes
 // them from the search layer, in one transaction. It waits for a sync unit that is being applied.
 // Records 0 means none matches yet: the objection applies when one appears.
 func AddObjection(ctx context.Context, conn *pgx.Conn, key, reason string) (id int64, c Coverage, err error) {
-	ico, rpoID, err := splitKey(key)
+	k, err := splitKey(key)
 	if err != nil {
 		return 0, c, err
 	}
@@ -114,8 +154,18 @@ func AddObjection(ctx context.Context, conn *pgx.Conn, key, reason string) (id i
 	if err := lockObjections(ctx, tx); err != nil {
 		return 0, c, err
 	}
-	if err := tx.QueryRow(ctx, `INSERT INTO objection (ico, rpo_id, reason) VALUES ($1, $2, nullif($3, '')) RETURNING id`,
-		ico, rpoID, reason).Scan(&id); err != nil {
+	if k.dic != nil {
+		var ico string
+		err := tx.QueryRow(ctx, `SELECT ico FROM fs_tax_subject WHERE dic = $1 AND ico IS NOT NULL AND absent_since IS NULL`, *k.dic).Scan(&ico)
+		switch {
+		case err == nil:
+			return 0, c, fmt.Errorf("%w %s", ErrDICHasICO, ico)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return 0, c, err
+		}
+	}
+	if err := tx.QueryRow(ctx, `INSERT INTO objection (ico, rpo_id, dic, reason) VALUES ($1, $2, $3, nullif($4, '')) RETURNING id`,
+		k.ico, k.rpoID, k.dic, reason).Scan(&id); err != nil {
 		return 0, c, err
 	}
 	if _, err := syncObjections(ctx, tx, BasisAtObjection, ""); err != nil {
@@ -132,11 +182,11 @@ func AddObjection(ctx context.Context, conn *pgx.Conn, key, reason string) (id i
 
 // ActiveObjections returns the ids of the active objections recorded for key.
 func ActiveObjections(ctx context.Context, conn *pgx.Conn, key string) ([]int64, error) {
-	ico, rpoID, err := splitKey(key)
+	k, err := splitKey(key)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := conn.Query(ctx, `SELECT id FROM objection WHERE revoked_at IS NULL AND (ico = $1 OR rpo_id = $2) ORDER BY id`, ico, rpoID)
+	rows, err := conn.Query(ctx, `SELECT id FROM objection WHERE revoked_at IS NULL AND (ico = $1 OR rpo_id = $2 OR dic = $3) ORDER BY id`, k.ico, k.rpoID, k.dic)
 	if err != nil {
 		return nil, err
 	}
@@ -242,13 +292,15 @@ WHERE objection_id = $1 AND rpo_id = $2 AND released_at IS NOT NULL`, id, record
 
 // ListObjections returns every objection with its links, revoked ones included, in id order.
 func ListObjections(ctx context.Context, conn *pgx.Conn) ([]Objection, error) {
-	rows, err := conn.Query(ctx, `SELECT id, coalesce(ico, 'r' || rpo_id), coalesce(reason, ''), created_at, revoked_at FROM objection ORDER BY id`)
+	rows, err := conn.Query(ctx, `SELECT o.id, `+keyExpr+`, coalesce(o.reason, ''), o.created_at, o.revoked_at,
+  coalesce((SELECT t.ico FROM fs_tax_subject t WHERE t.dic = o.dic AND t.ico IS NOT NULL), '')
+FROM objection o ORDER BY o.id`)
 	if err != nil {
 		return nil, err
 	}
 	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Objection, error) {
 		var o Objection
-		err := r.Scan(&o.ID, &o.Key, &o.Reason, &o.CreatedAt, &o.RevokedAt)
+		err := r.Scan(&o.ID, &o.Key, &o.Reason, &o.CreatedAt, &o.RevokedAt, &o.DICHasICO)
 		return o, err
 	})
 	if err != nil {
@@ -294,16 +346,16 @@ func RestoreObjections(ctx context.Context, conn *pgx.Conn, list []Objection) (i
 	added := 0
 	var ids []int64
 	for _, o := range list {
-		ico, rpoID, err := splitKey(o.Key)
+		k, err := splitKey(o.Key)
 		if err != nil {
 			return 0, fmt.Errorf("restore: %w", err)
 		}
 		var id int64
-		err = tx.QueryRow(ctx, `SELECT id FROM objection WHERE created_at = $3 AND (ico = $1 OR rpo_id = $2)`, ico, rpoID, o.CreatedAt).Scan(&id)
+		err = tx.QueryRow(ctx, `SELECT id FROM objection WHERE created_at = $4 AND (ico = $1 OR rpo_id = $2 OR dic = $3)`, k.ico, k.rpoID, k.dic, o.CreatedAt).Scan(&id)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			if err := tx.QueryRow(ctx, `INSERT INTO objection (ico, rpo_id, reason, created_at, revoked_at)
-VALUES ($1, $2, nullif($3, ''), $4, $5) RETURNING id`, ico, rpoID, o.Reason, o.CreatedAt, o.RevokedAt).Scan(&id); err != nil {
+			if err := tx.QueryRow(ctx, `INSERT INTO objection (ico, rpo_id, dic, reason, created_at, revoked_at)
+VALUES ($1, $2, $3, nullif($4, ''), $5, $6) RETURNING id`, k.ico, k.rpoID, k.dic, o.Reason, o.CreatedAt, o.RevokedAt).Scan(&id); err != nil {
 				return 0, err
 			}
 			added++

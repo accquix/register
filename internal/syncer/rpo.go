@@ -113,9 +113,11 @@ type State struct {
 		// ETags. If the bucket shows another one for the same date, the files were replaced, and
 		// what was applied from the old set must not be mixed with the new.
 		Fingerprint string `json:"fingerprint,omitempty"`
-		ETag        string `json:"etag,omitempty"`    // FS: ETag of the applied version
-		SHA256      string `json:"sha256,omitempty"`  // FS: content hash of the applied version
-		Skipped     int    `json:"skipped,omitempty"` // FS: items of the applied version without any identifier
+		ETag        string `json:"etag,omitempty"`     // FS: ETag of the applied version
+		SHA256      string `json:"sha256,omitempty"`   // FS: content hash of the applied version
+		Skipped     int    `json:"skipped,omitempty"`  // FS: items of the applied version without any identifier
+		Items       int    `json:"items,omitempty"`    // FS: items of the applied version kept (with an identifier)
+		NoDICYet    int    `json:"noDicYet,omitempty"` // FS, DIČ list: items with an IČO and no DIČ yet
 	}
 	Diagnostic string
 }

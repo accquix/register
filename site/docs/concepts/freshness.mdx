@@ -5,6 +5,17 @@ description: Section states, stale data, when the API says "not found", and sect
 
 A mirror can be behind. Accquix Register never turns "I do not know" into "it does not exist".
 
+## How fresh the data are
+
+The Register of Legal Entities publishes a full snapshot about once a month and a file of the day's changes every
+day. The register applies each daily file on its next sync pass, every hour by default, so a new business or a
+changed address reaches your instance within the hour of the ministry publishing it; it does not wait for the next
+snapshot. The monthly snapshot is then used to check the daily chain and to notice records that disappeared.
+
+The Financial Administration lists are checked on every pass too and applied when a new version appears. A business
+can therefore be in the register before it has a DIČ: its tax section is `absent` until the taxpayer list carries it.
+`GET /v1/sources` shows the as-of date of every source.
+
 ## Section states
 
 Every lookup section carries a `state`:

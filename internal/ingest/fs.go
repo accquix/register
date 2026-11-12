@@ -26,7 +26,8 @@ type FSUnit struct {
 type FSResult struct {
 	AsOf       time.Time
 	Items      int   // items in the file, without the skipped ones
-	Skipped    int   // items without any identifier, left out (OQ-37)
+	Skipped    int   // items without any identifier, left out (OQ-37, D53)
+	NoDICYet   int   // DIČ list: items with an IČO and no DIČ yet, left out (D52)
 	Distinct   int   // distinct keys
 	Duplicates int   // items dropped as duplicates of a key
 	Conflicts  int   // keys whose duplicates differ in content (kept: the lowest row hash)
@@ -34,6 +35,8 @@ type FSResult struct {
 	Inserted   int
 	Updated    int
 	Absent     int64 // rows marked absent
+	// Linked: DIČ list only, objection id → RPO records linked to it in this unit (D56)
+	Linked map[int64]int
 }
 
 var fsStageCols = []string{"k", "dataset", "ic_dph", "dic", "ico", "name", "name_core", "municipality", "postal_code", "street",
@@ -93,6 +96,7 @@ func ApplyFS(ctx context.Context, conn *pgx.Conn, u FSUnit) (FSResult, error) {
 		return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, err)
 	}
 	defer func() { _ = dec.Close() }()
+	dec.SetUnidentified(u.List.Unidentified)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -111,7 +115,7 @@ func ApplyFS(ctx context.Context, conn *pgx.Conn, u FSUnit) (FSResult, error) {
 	if derr := dec.Err(); derr != nil {
 		return res, fmt.Errorf("%w: %s: %w", ErrRejected, u.Name, derr)
 	}
-	res.AsOf, res.Items, res.Skipped = dec.AsOf(), dec.Count(), dec.Skipped()
+	res.AsOf, res.Items, res.Skipped, res.NoDICYet = dec.AsOf(), dec.Count(), dec.Skipped(), dec.NoDICYet()
 	now := time.Now
 	if u.Now != nil {
 		now = u.Now
@@ -181,6 +185,15 @@ SELECT count(*) FILTER (WHERE inserted)::int, count(*) FILTER (WHERE NOT inserte
 		return res, err
 	}
 	res.Absent = tag.RowsAffected()
+	if u.List.Target == fs.TaxSubjects {
+		// D56: a DIČ with an objection that the list now gives an IČO links that IČO's RPO records
+		if res.Linked, err = syncObjections(ctx, tx, BasisCarriedICO, u.Name); err != nil {
+			return res, err
+		}
+		if err := refreshDICLinked(ctx, tx); err != nil {
+			return res, err
+		}
+	}
 
 	detail := fmt.Sprintf("list date %s; %d duplicates (%d conflicting)", res.AsOf.Format("2006-01-02"), res.Duplicates, res.Conflicts)
 	if _, err := tx.Exec(ctx, `INSERT INTO sync_unit (unit, source, sha256, records, inserted, updated, absent, status, detail)

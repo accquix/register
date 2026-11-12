@@ -39,13 +39,15 @@ var Attribution = []string{
 
 // SourceInfo is one row of sync_source plus its freshness.
 type SourceInfo struct {
-	Source        string `json:"source"`
-	State         string `json:"state" enum:"empty,bootstrap,daily,gap_wait,reconcile,blocked"`
-	PublishedAsOf string `json:"publishedAsOf,omitempty" doc:"Date the published data was stamped by the agency"`
-	Stale         bool   `json:"stale"`
-	MaxAgeDays    int    `json:"maxAgeDays"`
-	Diagnostic    string `json:"diagnostic,omitempty"`
-	SkippedItems  int    `json:"skippedItems,omitempty" doc:"Items of the published file left out: no identifier at all, or (in the DIČ list) an IČO without a DIČ yet. More than 100 blocks the list"`
+	Source          string `json:"source"`
+	State           string `json:"state" enum:"empty,bootstrap,daily,gap_wait,reconcile,blocked"`
+	PublishedAsOf   string `json:"publishedAsOf,omitempty" doc:"Date the published data was stamped by the agency"`
+	Stale           bool   `json:"stale"`
+	MaxAgeDays      int    `json:"maxAgeDays"`
+	Diagnostic      string `json:"diagnostic,omitempty"`
+	Items           int    `json:"items,omitempty" doc:"Financial Administration lists: items of the published file kept, with an identifier"`
+	SkippedItems    int    `json:"skippedItems,omitempty" doc:"Items of the published file left out because they carry no identifier at all. Above the list's cap (0.05 % of the DIČ list, at most 1000; 0.01 % of the others, at most 100; never less than 10) the list is blocked"`
+	ItemsWithoutDIC int    `json:"itemsWithoutDic,omitempty" doc:"DIČ list: items left out because they have an IČO and no DIČ yet (new businesses). Normal, with no limit"`
 }
 
 func (s SourceInfo) published() bool { return s.PublishedAsOf != "" }
@@ -60,7 +62,7 @@ type Store struct {
 // Sources returns every expected source, published or not.
 func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT source, state, published_as_of, coalesce(diagnostic, ''),
-  coalesce((cursor->>'skipped')::int, 0) FROM sync_source`)
+  coalesce((cursor->>'skipped')::int, 0), coalesce((cursor->>'noDicYet')::int, 0), coalesce((cursor->>'items')::int, 0) FROM sync_source`)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +75,7 @@ func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 	for rows.Next() {
 		var si SourceInfo
 		var pub *time.Time
-		if err := rows.Scan(&si.Source, &si.State, &pub, &si.Diagnostic, &si.SkippedItems); err != nil {
+		if err := rows.Scan(&si.Source, &si.State, &pub, &si.Diagnostic, &si.SkippedItems, &si.ItemsWithoutDIC, &si.Items); err != nil {
 			return nil, err
 		}
 		si.MaxAgeDays = defaultFSMaxAge
@@ -219,12 +221,23 @@ type Subject struct {
 	Risk     Risk     `json:"risk"`
 }
 
-// Taxpayer is a natural person without an IČO (D26): DIČ, name and municipality only.
+// Taxpayer is a taxpayer without an IČO, mostly a natural person (D26): DIČ, name, municipality
+// and the address as the DIČ list publishes it (D57), for an API key on an instance without
+// anonymous access.
 type Taxpayer struct {
 	DIC          string    `json:"dic"`
 	Name         string    `json:"name,omitempty"`
 	Municipality string    `json:"municipality,omitempty"`
+	Address      *Address  `json:"address,omitempty" doc:"The address as the Financial Administration's DIČ list publishes it (D57); the street field holds street and number together"`
 	Source       SourceRef `json:"source"`
+}
+
+// TaxpayerAddress is the address of a DIČ list row, nil when it has none.
+func TaxpayerAddress(street, postalCode, municipality, country string) *Address {
+	if street == "" && postalCode == "" && municipality == "" && country == "" {
+		return nil
+	}
+	return &Address{Street: street, PostalCode: postalCode, Municipality: municipality, Country: country}
 }
 
 func version(v any) string {
@@ -471,11 +484,12 @@ WHERE (ico = $1 OR ($2 <> '' AND dic = $2)) AND absent_since IS NULL ORDER BY da
 }
 
 // ByDIC resolves a DIČ: to a subject when the taxpayer has an IČO, else to a Taxpayer (D26).
-func (s *Store) ByDIC(ctx context.Context, srcs map[string]SourceInfo, dic string) (*Subject, *Taxpayer, error) {
-	var ico, name, muni string
+func (s *Store) ByDIC(ctx context.Context, srcs map[string]SourceInfo, dic string, withAddress bool) (*Subject, *Taxpayer, error) {
+	var ico, name, muni, street, psc, country string
 	var changed *time.Time
-	err := s.Pool.QueryRow(ctx, `SELECT coalesce(ico, ''), coalesce(name, ''), coalesce(municipality, ''), changed_at
-FROM fs_tax_subject WHERE dic = $1 AND absent_since IS NULL`, dic).Scan(&ico, &name, &muni, &changed)
+	err := s.Pool.QueryRow(ctx, `SELECT coalesce(ico, ''), coalesce(name, ''), coalesce(municipality, ''),
+  coalesce(street, ''), coalesce(postal_code, ''), coalesce(country, ''), changed_at
+FROM fs_tax_subject WHERE dic = $1 AND absent_since IS NULL`, dic).Scan(&ico, &name, &muni, &street, &psc, &country, &changed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil
 	}
@@ -488,7 +502,13 @@ FROM fs_tax_subject WHERE dic = $1 AND absent_since IS NULL`, dic).Scan(&ico, &n
 	}
 	src := srcs["fs:ds_dsrdp"]
 	tp := &Taxpayer{DIC: dic, Name: name, Municipality: muni, Source: ref(src, "ds_dsrdp")}
-	tp.Source.Version = version(map[string]string{"dic": dic, "name": name, "municipality": muni})
+	fields := map[string]string{"dic": dic, "name": name, "municipality": muni}
+	if withAddress {
+		// the version covers what is returned, so a client sees an address change as a change
+		tp.Address = TaxpayerAddress(street, psc, muni, country)
+		fields["street"], fields["postalCode"], fields["country"] = street, psc, country
+	}
+	tp.Source.Version = version(fields)
 	tp.Source.ChangedAt = changed
 	return nil, tp, nil
 }

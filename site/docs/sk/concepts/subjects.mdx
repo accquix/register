@@ -38,6 +38,31 @@ subjektom. Preto sa IČO s nesprávnou kontrolnou číslicou nikdy neodmietne: a
 **IČ DPH nie je jedinečný kľúč.** Členovia skupiny DPH (§4b) zdieľajú jedno IČ DPH, takže overenie podľa IČ DPH môže
 vrátiť viac subjektov.
 
+## Všetky prípady IČO a DIČ
+
+Čo register robí v každom prípade pri vypnutých daňovníkoch (predvolené) a zapnutých
+(`REGISTER_SEARCH_TAXPAYERS=true`). Presné overenie podľa IČO, DIČ alebo IČ DPH je v oboch rovnaké.
+
+| Prípad | Vyhľadávanie podľa názvu, vypnuté | Vyhľadávanie podľa názvu, zapnuté | Presné IČO alebo DIČ |
+| --- | --- | --- | --- |
+| IČO aj DIČ (firma, živnostník) | nájde sa | nájde sa, ako pri vypnutých | subjekt so všetkými časťami |
+| IČO, zatiaľ bez DIČ (nový podnik) | nájde sa z RPO | rovnako | IČO ho nájde, daňová časť `absent`; v `/v1/sources` sa počíta v `itemsWithoutDic` |
+| Len DIČ (súkromná osoba, napríklad prenajímateľ) | nenájde sa | len podľa celého mena: DIČ, meno, obec, zverejnená adresa; najviac päť, za firmami | DIČ vráti `taxpayer`: meno, obec a zverejnenú adresu |
+| Len DIČ, so zlým IČO v zozname DIČ | nenájde sa | ako „len DIČ“ | ako „len DIČ“ |
+| Ani IČO, ani DIČ | položka sa vynechá a započíta (`skippedItems`); nad limitom zoznamu sa zoznam zablokuje | rovnako | — |
+| Len DIČ, potom pribudne IČO | nájde sa ako podnik | zmizne z vyhľadávania daňovníkov, nájde sa ako podnik | obe vedú k podniku |
+| Najprv IČO, DIČ neskôr | nájde sa | rovnako | DIČ začne viesť k podniku |
+| Námietka podľa IČO | jeho záznamy sú skryté | skryté, a tiež riadky len s DIČ, ktorých celé meno názov subjektu obsahuje (aj menovci) | nájde sa |
+| Námietka podľa DIČ (súkromná osoba) | nič nemení: podľa názvu sa aj tak nenájde | mimo vyhľadávania daňovníkov | nájde sa |
+| Námietka podľa DIČ, potom pribudne IČO | záznamy s týmto IČO sa samy prepoja a skryjú | rovnako | nájde sa |
+| Námietka podľa DIČ, IČO pribudne a znova zmizne | prepojenie ostane, záznamy ostanú skryté | rovnako | nájde sa |
+| Anonymný prístup zapnutý | riadky len s DIČ sa nezobrazia nikdy, ani podľa presného DIČ | daňovníci nemôžu byť zapnutí spolu s anonymným prístupom | len IČO a podniky |
+| Približné vyhľadávanie (`mode=fuzzy`) | len podniky | daňovníci sa nehľadajú (`not_searched`) | — |
+| Zoznam DIČ je zastaraný | — | daňovníci sa nehľadajú (`stale`); nikdy „nenájdené“ | DIČ odpovie `503` alebo nesie `stale` |
+| Nad limitom daňovníkov | — | podniky sa nájdu, daňovníci nie (`rate_limited`) | bez vplyvu |
+
+Námietka podľa DIČ, ktoré už má IČO, sa odmietne: namietajte podľa IČO.
+
 ## Ako vyzerajú zdrojové dáta
 
 Tieto skutočnosti, zistené v reálnych súboroch, určujú, ako ich register číta:

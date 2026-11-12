@@ -21,15 +21,23 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
   the reliability index (`ds_iz_ran`) and three risk lists (`ds_dphz`, `ds_dphv`, `ds_dpho`).
 - **Validation thresholds** on every file and list: a suspicious update blocks its source and keeps
   the previous data, instead of being published (D23, D34, D35). Items without any identifier are
-  left out and counted (D38).
+  left out and counted; above a cap that follows each list's size (0.05 % of the DIČ list, at
+  most 1000; 0.01 % of the others, at most 100; never less than 10) they block it, and a sudden jump
+  within the cap is applied with a warning (D38, D53). Items of the DIČ list with an IČO and no DIČ
+  yet (new businesses) are left out and counted apart, with no limit (D52).
 - **Search** `GET /v1/search`: one box for a name, IČO, DIČ or IČ DPH; diacritics and word order
-  ignored, the start of any word matched; an adaptive default mode and an optional, rate-limited
-  fuzzy mode. Every result carries the full address (D37).
+  ignored, the start of any word matched; an adaptive default mode and an optional fuzzy mode.
+  Every result carries the full address (D37). The exact DIČ of a taxpayer without an IČO gives a
+  card of `kind: taxpayer` with the DIČ, name and municipality only, as the lookup does (D54).
+- **Taxpayer name search**, off by default (`REGISTER_SEARCH_TAXPAYERS`): taxpayers without an IČO
+  by their full name only, in the default mode, with an API key, within a separate per-key limit;
+  the response field `taxpayers` says whether they were searched (D56). A taxpayer without an IČO
+  comes with the address the DIČ list publishes, in the exact lookup by DIČ too, for invoicing (D57).
 - **Lookup** `GET /v1/lookup/{id}` by IČO, DIČ or IČ DPH, with sections `identity`, `tax`, `vat`
   and `risk`, each `present`, `absent` or `unknown`, with its source, as-of date and a content
   version; `POST /v1/lookup:batch` for up to 100 identifiers, with `fields: "versions"` for daily
   change checks.
-- **Freshness** `GET /v1/sources` and **capabilities** `GET /v1/capabilities`; `/livez` and `/readyz`.
+- **Freshness** `GET /v1/sources` (with `items`, `skippedItems` and `itemsWithoutDic` per list) and **capabilities** `GET /v1/capabilities`; `/livez` and `/readyz`.
 - **MCP adapter** for AI agents at `/mcp`, off by default (`REGISTER_MCP`), with three read-only
   tools and the same keys, limits and logging rules as REST; `accquix-register mcp --url` for local
   clients over stdio (D36).
@@ -39,7 +47,8 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
   linked record stays hidden when it loses or changes its IČO. `suppress --list --id N` shows the
   links, `suppress --release --id N --record R` excludes one wrongly linked record for good
   (`--unrelease` withdraws it), and `suppress --undo --id N` revokes one objection (D42). The rules
-  are fixed in `docs/objection-invariants.md`.
+  are fixed in `docs/objection-invariants.md`. A taxpayer without an IČO objects by DIČ
+  (`suppress --subject <DIČ>`), which keeps them out of taxpayer name search (D56).
 - **Objection backup**: `suppress --export --output FILE` and `suppress --restore FILE`. The file
   (format `objections-v3`) is tab-separated with a count and checksum trailer and carries the
   links, releases and revocations. An export is atomic and replaces a file only when the file is a
@@ -63,13 +72,17 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
 
 - The API's connection pool is 10 connections unless `pool_max_conns` is set in
   `REGISTER_DATABASE_URL` (D40).
+- API keys have no rate limit by default; `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` and
+  `REGISTER_FUZZY_EVERY` set one. Anonymous callers keep theirs per client IP (20/s, burst 40, one
+  fuzzy search per 5 s), now under `REGISTER_ANONYMOUS_*` (D55).
 
 ### Security
 
 - Personal-data minimisation: no residence, birth data, statutory bodies or representatives are
   stored; logs never carry search queries or identifier values.
-- API keys are stored only as SHA-256 hashes and compared in constant time; per-key rate limits;
-  anonymous access is off by default and cannot look up natural persons by DIČ (D26).
+- API keys are stored only as SHA-256 hashes and compared in constant time; optional per-key rate
+  limits; anonymous access is off by default, limited per client IP, and cannot look up natural
+  persons by DIČ (D26).
 - The MCP endpoint refuses cross-origin browser requests (DNS rebinding).
 - The API's database role can only read; `serve` refuses to start on an outdated schema;
   `migrate` verifies the effective privileges of the roles, and an upgrade that changes what is

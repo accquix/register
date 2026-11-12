@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -59,29 +60,43 @@ type Config struct {
 	FSMaxDrop float64
 	// FSSkipMinRows drops the row floors of the large FS lists (REGISTER_FS_SKIP_MIN_ROWS, false).
 	FSSkipMinRows bool
+	// FSMaxUnidentified replaces every FS list's cap of items without any identifier with this
+	// count when set (REGISTER_FS_MAX_UNIDENTIFIED; default: per list, D53).
+	FSMaxUnidentified int
 
 	// serve
 	Listen         string // REGISTER_LISTEN, ":8080"
 	APIKeys        string // REGISTER_API_KEYS (secret): "name:sha256hex,name2:sha256hex"
 	AllowAnonymous bool   // REGISTER_ALLOW_ANONYMOUS, false
 	SearchFuzzy    bool   // REGISTER_SEARCH_FUZZY, true
+	// SearchTaxpayers: name search also finds taxpayers without an IČO by their full name
+	// (REGISTER_SEARCH_TAXPAYERS, false; D56). Refused together with anonymous access.
+	SearchTaxpayers       bool
+	TaxpayerRatePerSecond float64 // REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND, 1 (per key)
+	TaxpayerRateBurst     int     // REGISTER_SEARCH_TAXPAYERS_RATE_BURST, 10
 	// MCP serves the read-only MCP adapter at /mcp (REGISTER_MCP, false; D36).
 	MCP bool
 	// MCPAllowedOrigins are browser origins allowed to call /mcp (REGISTER_MCP_ALLOWED_ORIGINS,
 	// comma-separated; empty refuses every cross-origin browser request).
 	MCPAllowedOrigins []string
 	// MCPKey is the API key the stdio adapter sends to the instance (REGISTER_MCP_KEY, secret).
-	MCPKey          string
-	RatePerSecond   float64       // REGISTER_RATE_PER_SECOND, 20 (per key, per instance)
-	RateBurst       int           // REGISTER_RATE_BURST, 40
-	FuzzyEvery      time.Duration // REGISTER_FUZZY_EVERY, 5s: one fuzzy search per key per interval (burst 2)
-	FuzzyConcurrent int           // REGISTER_FUZZY_CONCURRENCY, 1 (per instance)
-	FuzzyTimeout    time.Duration // REGISTER_FUZZY_TIMEOUT, 2s
-	QueryTimeout    time.Duration // REGISTER_QUERY_TIMEOUT, 3s: default search and lookup
-	MaxInFlight     int           // REGISTER_MAX_IN_FLIGHT, 0 = the connection pool size (D39)
-	AdmitWait       time.Duration // REGISTER_ADMIT_WAIT, 250ms: wait for a free slot before 503 overloaded
-	WordStepMax     int           // REGISTER_SEARCH_WORD_STEP_MAX, 1000
-	WordCap         int           // REGISTER_SEARCH_WORD_CAP, 1000
+	MCPKey string
+	// Per-key limits are off by default: an instance usually serves one application with one key,
+	// and its operator sets them when several applications or clients share it.
+	RatePerSecond float64       // REGISTER_RATE_PER_SECOND, unset = no per-key limit (per key, per instance)
+	RateBurst     int           // REGISTER_RATE_BURST, twice the rate
+	FuzzyEvery    time.Duration // REGISTER_FUZZY_EVERY, unset = no per-key limit: one fuzzy search per key per interval (burst 2)
+	// Anonymous callers (REGISTER_ALLOW_ANONYMOUS) are always limited per client IP.
+	AnonRatePerSecond float64       // REGISTER_ANONYMOUS_RATE_PER_SECOND, 20
+	AnonRateBurst     int           // REGISTER_ANONYMOUS_RATE_BURST, 40
+	AnonFuzzyEvery    time.Duration // REGISTER_ANONYMOUS_FUZZY_EVERY, 5s
+	FuzzyConcurrent   int           // REGISTER_FUZZY_CONCURRENCY, 1 (per instance)
+	FuzzyTimeout      time.Duration // REGISTER_FUZZY_TIMEOUT, 2s
+	QueryTimeout      time.Duration // REGISTER_QUERY_TIMEOUT, 3s: default search and lookup
+	MaxInFlight       int           // REGISTER_MAX_IN_FLIGHT, 0 = the connection pool size (D39)
+	AdmitWait         time.Duration // REGISTER_ADMIT_WAIT, 250ms: wait for a free slot before 503 overloaded
+	WordStepMax       int           // REGISTER_SEARCH_WORD_STEP_MAX, 1000
+	WordCap           int           // REGISTER_SEARCH_WORD_CAP, 1000
 }
 
 // DefaultRPOBootstrapMinRecords is the floor of a first RPO publication: about 96 % of the
@@ -100,6 +115,9 @@ func (c Config) Overrides() []string {
 	}
 	if c.FSMaxDrop > 0 {
 		out = append(out, fmt.Sprintf("REGISTER_FS_MAX_DROP=%g", c.FSMaxDrop))
+	}
+	if c.FSMaxUnidentified > 0 {
+		out = append(out, fmt.Sprintf("REGISTER_FS_MAX_UNIDENTIFIED=%d", c.FSMaxUnidentified))
 	}
 	if c.RPODateSkewDays != 1 {
 		out = append(out, fmt.Sprintf("REGISTER_RPO_DATE_SKEW_DAYS=%d", c.RPODateSkewDays))
@@ -221,6 +239,9 @@ func Load(e Env) (Config, error) {
 			return c, fmt.Errorf("REGISTER_FS_MAX_DROP: %w", err)
 		}
 	}
+	if c.FSMaxUnidentified, err = positiveInt(e.Getenv("REGISTER_FS_MAX_UNIDENTIFIED"), 0); err != nil {
+		return c, fmt.Errorf("REGISTER_FS_MAX_UNIDENTIFIED: %w", err)
+	}
 	if c.FSSkipMinRows, err = boolVar(e, "REGISTER_FS_SKIP_MIN_ROWS", false); err != nil {
 		return c, err
 	}
@@ -306,6 +327,12 @@ func (c *Config) loadServe(e Env) error {
 	if c.SearchFuzzy, err = boolVar(e, "REGISTER_SEARCH_FUZZY", true); err != nil {
 		return err
 	}
+	if c.SearchTaxpayers, err = boolVar(e, "REGISTER_SEARCH_TAXPAYERS", false); err != nil {
+		return err
+	}
+	if c.SearchTaxpayers && c.AllowAnonymous {
+		return errors.New("REGISTER_SEARCH_TAXPAYERS=true needs API keys: it is refused together with REGISTER_ALLOW_ANONYMOUS=true (D26, D56)")
+	}
 	if c.MCP, err = boolVar(e, "REGISTER_MCP", false); err != nil {
 		return err
 	}
@@ -322,17 +349,29 @@ func (c *Config) loadServe(e Env) error {
 			return fmt.Errorf("REGISTER_MAX_IN_FLIGHT: %w", err)
 		}
 	}
-	if v := e.Getenv("REGISTER_RATE_PER_SECOND"); v == "" {
-		c.RatePerSecond = 20
-	} else if c.RatePerSecond, err = strconv.ParseFloat(v, 64); err != nil || c.RatePerSecond <= 0 {
-		return fmt.Errorf("REGISTER_RATE_PER_SECOND: want a positive number, got %q", v)
+	for _, v := range []struct {
+		name string
+		dst  *float64
+		def  float64
+	}{
+		{"REGISTER_RATE_PER_SECOND", &c.RatePerSecond, 0},
+		{"REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND", &c.TaxpayerRatePerSecond, 1},
+		{"REGISTER_ANONYMOUS_RATE_PER_SECOND", &c.AnonRatePerSecond, 20},
+	} {
+		if s := e.Getenv(v.name); s == "" {
+			*v.dst = v.def
+		} else if *v.dst, err = strconv.ParseFloat(s, 64); err != nil || *v.dst <= 0 {
+			return fmt.Errorf("%s: want a positive number, got %q", v.name, s)
+		}
 	}
 	for _, v := range []struct {
 		name string
 		dst  *int
 		def  int
 	}{
-		{"REGISTER_RATE_BURST", &c.RateBurst, 40},
+		{"REGISTER_RATE_BURST", &c.RateBurst, int(math.Ceil(2 * c.RatePerSecond))},
+		{"REGISTER_ANONYMOUS_RATE_BURST", &c.AnonRateBurst, 40},
+		{"REGISTER_SEARCH_TAXPAYERS_RATE_BURST", &c.TaxpayerRateBurst, 10},
 		{"REGISTER_FUZZY_CONCURRENCY", &c.FuzzyConcurrent, 1},
 		{"REGISTER_SEARCH_WORD_STEP_MAX", &c.WordStepMax, 1000},
 		{"REGISTER_SEARCH_WORD_CAP", &c.WordCap, 1000},
@@ -346,7 +385,8 @@ func (c *Config) loadServe(e Env) error {
 		dst  *time.Duration
 		def  time.Duration
 	}{
-		{"REGISTER_FUZZY_EVERY", &c.FuzzyEvery, 5 * time.Second},
+		{"REGISTER_FUZZY_EVERY", &c.FuzzyEvery, 0},
+		{"REGISTER_ANONYMOUS_FUZZY_EVERY", &c.AnonFuzzyEvery, 5 * time.Second},
 		{"REGISTER_FUZZY_TIMEOUT", &c.FuzzyTimeout, 2 * time.Second},
 		{"REGISTER_QUERY_TIMEOUT", &c.QueryTimeout, 3 * time.Second},
 		{"REGISTER_ADMIT_WAIT", &c.AdmitWait, 250 * time.Millisecond},

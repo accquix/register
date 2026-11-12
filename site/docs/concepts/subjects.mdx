@@ -38,6 +38,31 @@ So a failing IČO is never rejected: when it exists in RPO it is returned, and `
 **An IČ DPH is not a unique key.** The members of a VAT group (§4b) share one IČ DPH, so a lookup by IČ DPH can
 return several subjects.
 
+## Every case of IČO and DIČ
+
+What the register does in each case, with taxpayers off (the default) and on (`REGISTER_SEARCH_TAXPAYERS=true`).
+Exact lookup by IČO, DIČ or IČ DPH is the same in both.
+
+| Case | Name search, off | Name search, on | Exact IČO or DIČ |
+| --- | --- | --- | --- |
+| IČO and DIČ (a company, a sole trader) | found | found, as when off | the subject, with every section |
+| IČO, no DIČ yet (a new business) | found from RPO | the same | IČO finds it, tax section `absent`; counted as `itemsWithoutDic` in `/v1/sources` |
+| DIČ only (a private person, such as a landlord) | not found | by the full name only: DIČ, name, municipality, published address; at most five, after the businesses | DIČ gives a `taxpayer`: name, municipality and the published address |
+| DIČ only, with a malformed IČO in the DIČ list | not found | as "DIČ only" | as "DIČ only" |
+| Neither IČO nor DIČ | the item is left out and counted (`skippedItems`); above the list's cap the list is blocked | the same | — |
+| DIČ only, then an IČO appears | found as a business | leaves the taxpayer search, found as a business | both lead to the business |
+| IČO first, the DIČ later | found | the same | the DIČ starts leading to the business |
+| Objection by IČO | its records are hidden | hidden, and so are DIČ-only rows whose full name the subject's name holds (namesakes too) | still found |
+| Objection by DIČ (a private person) | changes nothing: not in name search anyway | out of the taxpayer search | still found |
+| Objection by DIČ, then an IČO appears | the records with that IČO are linked and hidden by themselves | the same | still found |
+| Objection by DIČ, the IČO appears and goes again | the link stays, the records stay hidden | the same | still found |
+| Anonymous access on | DIČ-only rows are never shown, not even by exact DIČ | taxpayers cannot be on with anonymous access | IČO and businesses only |
+| Fuzzy search (`mode=fuzzy`) | businesses only | taxpayers are not searched (`not_searched`) | — |
+| The DIČ list is stale | — | taxpayers are not searched (`stale`); never "not found" | a DIČ answers `503` or carries `stale` |
+| Over the taxpayer limit | — | businesses are found, taxpayers not (`rate_limited`) | not affected |
+
+An objection by DIČ for a DIČ that already has an IČO is refused: object by the IČO.
+
 ## What the source data looks like
 
 These facts, found in the real files, shape how the register reads them:

@@ -27,8 +27,11 @@ type FSConfig struct {
 	// SkipMinRows drops the per-list row floors (tests with small synthetic lists; an operator who
 	// must accept a list that legitimately fell below its floor).
 	SkipMinRows bool
-	Now         func() time.Time // default time.Now
-	Log         *slog.Logger
+	// MaxUnidentified, when > 0, replaces every list's cap of items without any identifier with this
+	// count (D53: to accept a version whose count grew for a known reason: unblock, run once).
+	MaxUnidentified int
+	Now             func() time.Time // default time.Now
+	Log             *slog.Logger
 }
 
 // FS syncs each list independently: a conditional GET, and a new version is one unit. A blocked
@@ -43,7 +46,7 @@ func NewFS(conn *pgx.Conn, cfg FSConfig) *FS {
 	if cfg.Lists == nil {
 		cfg.Lists = fs.Lists
 	}
-	if cfg.MaxDrop > 0 || cfg.SkipMinRows {
+	if cfg.MaxDrop > 0 || cfg.SkipMinRows || cfg.MaxUnidentified > 0 {
 		lists := make([]fs.List, len(cfg.Lists))
 		for i, l := range cfg.Lists {
 			if cfg.MaxDrop > 0 {
@@ -51,6 +54,9 @@ func NewFS(conn *pgx.Conn, cfg FSConfig) *FS {
 			}
 			if cfg.SkipMinRows {
 				l.MinRows = 0
+			}
+			if cfg.MaxUnidentified > 0 {
+				l.Unidentified = fs.UnidentifiedCap{Max: cfg.MaxUnidentified, Floor: cfg.MaxUnidentified}
 			}
 			lists[i] = l
 		}
@@ -130,13 +136,14 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 	}
 	name := fmt.Sprintf("%s:%s", src, f.SHA256[:16])
 	t0 := time.Now()
+	prevSkipped := st.Cursor.Skipped
 	res, err := ingest.ApplyFS(ctx, s.conn, ingest.FSUnit{
 		List: l, Name: name, SHA256: f.SHA256, Path: f.Path, PrevAsOf: prev, Now: s.cfg.Now,
 		After: func(ctx context.Context, tx pgx.Tx, r ingest.FSResult) error {
 			ns := st
 			day := fmtDay(r.AsOf)
-			ns.State, ns.AppliedThrough, ns.PublishedAsOf, ns.Diagnostic, ns.PreviousState = "daily", day, day, "", ""
-			ns.Cursor.ETag, ns.Cursor.SHA256, ns.Cursor.Skipped = f.ETag, f.SHA256, r.Skipped
+			ns.State, ns.AppliedThrough, ns.PublishedAsOf, ns.Diagnostic, ns.PreviousState = "daily", day, day, skippedJump(prevSkipped, r.Skipped), ""
+			ns.Cursor.ETag, ns.Cursor.SHA256, ns.Cursor.Skipped, ns.Cursor.NoDICYet, ns.Cursor.Items = f.ETag, f.SHA256, r.Skipped, r.NoDICYet, r.Items
 			return saveState(ctx, tx, src, ns)
 		},
 	})
@@ -155,7 +162,24 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 		return fmt.Errorf("%w: %s", ErrBlocked, st.Diagnostic)
 	}
 	s.cfg.Log.Info("fs list applied", "list", l.Slug, "as_of", fmtDay(res.AsOf), "items", res.Items, "inserted", res.Inserted,
-		"updated", res.Updated, "absent", res.Absent, "duplicates", res.Duplicates, "conflicts", res.Conflicts, "skipped", res.Skipped,
+		"updated", res.Updated, "absent", res.Absent, "duplicates", res.Duplicates, "conflicts", res.Conflicts, "skipped", res.Skipped, "no_dic_yet", res.NoDICYet,
 		"duration", time.Since(t0).Round(time.Millisecond))
+	for id, n := range res.Linked {
+		s.cfg.Log.Warn("objection linked to records that carry its identifier", "objection", id, "records", n, "unit", name,
+			"review", fmt.Sprintf("suppress --list --id %d", id))
+	}
+	if w := skippedJump(prevSkipped, res.Skipped); w != "" {
+		s.cfg.Log.Warn("fs list: items without any identifier jumped", "list", l.Slug, "previous", prevSkipped, "now", res.Skipped)
+	}
 	return nil
+}
+
+// skippedJump is the warning for a version whose items without any identifier grew more than
+// threefold and by more than 20 since the version before (D53). Within the cap the version is
+// applied: the warning only asks the operator to look, in the log and in /v1/sources.
+func skippedJump(prev, now int) string {
+	if now > 3*prev && now-prev > 20 {
+		return fmt.Sprintf("warning: %d items without any identifier, %d in the version before (applied, within the cap)", now, prev)
+	}
+	return ""
 }

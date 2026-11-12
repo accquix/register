@@ -5,6 +5,17 @@ description: Stavy častí odpovede, neaktuálne dáta, kedy API povie „nenáj
 
 Zrkadlo môže zaostávať. Accquix Register nikdy nezmení „neviem“ na „neexistuje“.
 
+## Aké čerstvé sú dáta
+
+Register právnických osôb zverejňuje úplný snapshot približne raz za mesiac a každý deň súbor zmien za daný deň.
+Register každý denný súbor aplikuje pri ďalšej synchronizácii, predvolene každú hodinu, takže nový podnik alebo zmenená
+adresa sa do vašej inštancie dostane do hodiny od zverejnenia ministerstvom; na ďalší snapshot nečaká. Mesačný snapshot
+potom slúži na kontrolu reťazca denných súborov a na zistenie záznamov, ktoré zmizli.
+
+Zoznamy Finančnej správy sa kontrolujú pri každej synchronizácii a aplikujú sa, keď vyjde nová verzia. Podnik preto
+môže byť v registri skôr, než má DIČ: jeho daňová časť je `absent`, kým ho zoznam daňových subjektov neobsahuje.
+`GET /v1/sources` ukazuje dátum aktuálnosti každého zdroja.
+
 ## Stavy častí
 
 Každá časť overenia má `state`:

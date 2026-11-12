@@ -152,25 +152,83 @@ func TestUnidentifiedItemsAreSkipped(t *testing.T) {
 		t.Fatalf("the identified items around the skipped ones must be kept as they are: %+v", rows)
 	}
 
-	// up to the cap the file passes; one more rejects it
-	ok := append([]testkit.Item{testkit.TaxItem(1, "99900001")}, unidentified(fs.MaxUnidentified)...)
-	if _, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", ok)); err != nil || d.Skipped() != fs.MaxUnidentified {
-		t.Fatalf("at the cap: %v", err)
+	// a small file: the floor of 10 holds; one more rejects it at the end of the file
+	ok := append([]testkit.Item{testkit.TaxItem(1, "99900001")}, unidentified(10)...)
+	if _, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", ok)); err != nil || d.Skipped() != 10 {
+		t.Fatalf("at the floor: %v", err)
 	}
 	over := append(append([]testkit.Item{}, ok...), unidentified(1)...)
-	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", over)); err == nil || !strings.Contains(err.Error(), "without any identifier") {
-		t.Fatalf("over the cap: %v", err)
+	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", over)); err == nil || !strings.Contains(err.Error(), "11 of 12 items without any identifier") {
+		t.Fatalf("over the floor: %v", err)
+	}
+	// the hard maximum stops a broken file early, before its end
+	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", unidentified(1001))); err == nil || !strings.Contains(err.Error(), "more than 1000") {
+		t.Fatalf("over the maximum: %v", err)
+	}
+	// an operator's override for one run (REGISTER_FS_MAX_UNIDENTIFIED)
+	d, err = fs.Open("ds_dsrdp", write(t, testkit.FSZip("ds_dsrdp", "2026-11-11", over)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetUnidentified(fs.UnidentifiedCap{Max: 11, Floor: 11})
+	for d.Next() {
+	}
+	if d.Close(); d.Err() != nil || d.Skipped() != 11 {
+		t.Fatalf("override: %v", d.Err())
 	}
 
 	// a new sole trader: a valid IČO, no DIČ yet. Not an error, and nothing for the DIČ list to hold
 	newTrader := []testkit.Item{testkit.TaxItem(1, "99900001"), {"ICO": "99900002", "NAZOV_DS": "Nová Živnosť"}}
-	if rows, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", newTrader)); err != nil || len(rows) != 1 || d.Skipped() != 1 {
+	if rows, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", newTrader)); err != nil || len(rows) != 1 || d.Skipped() != 0 || d.NoDICYet() != 1 {
 		t.Fatalf("IČO without DIČ: %v %d", err, len(rows))
+	}
+
+	// D52: new businesses are normal and have no limit; they do not count against the cap of items
+	// without any identifier, which still holds next to them
+	many := []testkit.Item{testkit.TaxItem(1, "99900001")}
+	for i := range 300 {
+		many = append(many, testkit.Item{"ICO": fmt.Sprintf("9991%04d", i), "NAZOV_DS": "Nová Živnosť"})
+	}
+	many = append(many, unidentified(10)...)
+	if rows, d, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", many)); err != nil || len(rows) != 1 ||
+		d.NoDICYet() != 300 || d.Skipped() != 10 {
+		t.Fatalf("300 new businesses and 10 unidentified items: %v", err)
+	}
+	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", append(many, unidentified(1)...))); err == nil {
+		t.Fatal("the cap on items without any identifier must still hold next to new businesses")
 	}
 
 	// a malformed identifier is not "no identifier": it still rejects, with the item's position
 	bad := []testkit.Item{testkit.TaxItem(1, "99900001"), {"NAZOV_DS": "x"}, {"DIC": "12", "NAZOV_DS": "y"}}
 	if _, _, err := readAll(t, "ds_dsrdp", testkit.FSZip("ds_dsrdp", "2026-11-11", bad)); err == nil || !strings.Contains(err.Error(), "item 3:") {
 		t.Fatalf("a malformed DIČ after a skipped item: %v", err)
+	}
+}
+
+// D53: the cap follows the list's size. On the DIČ list of 2026-11-12 (1 423 331 items) the 41 real
+// items pass with a wide margin, 800 would block it; the other lists stay between 10 and 100.
+func TestUnidentifiedCap(t *testing.T) {
+	dsrdp, _ := fs.ListBySlug("ds_dsrdp")
+	dphs, _ := fs.ListBySlug("ds_dphs")
+	cases := []struct {
+		name  string
+		c     fs.UnidentifiedCap
+		items int
+		want  int
+	}{
+		{"DIČ list, real size", dsrdp.Unidentified, 1_423_331, 712},
+		{"DIČ list, small file", dsrdp.Unidentified, 100, 10},
+		{"DIČ list, huge file", dsrdp.Unidentified, 5_000_000, 1000},
+		{"VAT payers", dphs.Unidentified, 400_000, 40},
+		{"VAT payers, huge", dphs.Unidentified, 5_000_000, 100},
+		{"default for a small list", fs.UnidentifiedCap{}, 3000, 10},
+	}
+	for _, c := range cases {
+		if got := c.c.Allowed(c.items); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+	if a := dsrdp.Unidentified.Allowed(1_423_331); 41 > a || 800 <= a {
+		t.Fatalf("41 must pass and 800 block: cap %d", a)
 	}
 }

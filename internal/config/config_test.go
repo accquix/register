@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -101,5 +102,51 @@ func TestLoadRejectsBadNumbers(t *testing.T) {
 		if _, err := Load(env(map[string]string{k: v}, nil)); err == nil {
 			t.Errorf("%s=%s accepted", k, v)
 		}
+	}
+}
+
+// Per-key limits are off by default; anonymous callers keep theirs. A rate without a burst gets
+// twice the rate as the burst.
+func TestLoadLimits(t *testing.T) {
+	c, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RatePerSecond != 0 || c.RateBurst != 0 || c.FuzzyEvery != 0 ||
+		c.AnonRatePerSecond != 20 || c.AnonRateBurst != 40 || c.AnonFuzzyEvery.String() != "5s" || c.FSMaxUnidentified != 0 {
+		t.Fatalf("unexpected limit defaults: %+v", c)
+	}
+	c, err = Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a", "REGISTER_RATE_PER_SECOND": "2.5",
+		"REGISTER_FUZZY_EVERY": "10s", "REGISTER_FS_MAX_UNIDENTIFIED": "800"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RatePerSecond != 2.5 || c.RateBurst != 5 || c.FuzzyEvery.String() != "10s" || c.FSMaxUnidentified != 800 {
+		t.Fatalf("limits not applied: %+v", c)
+	}
+	if !slices.Contains(c.Overrides(), "REGISTER_FS_MAX_UNIDENTIFIED=800") {
+		t.Fatalf("the override must be logged: %v", c.Overrides())
+	}
+	for k, v := range map[string]string{"REGISTER_RATE_PER_SECOND": "0", "REGISTER_ANONYMOUS_RATE_PER_SECOND": "-1", "REGISTER_FS_MAX_UNIDENTIFIED": "x"} {
+		if _, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a", k: v}, nil)); err == nil {
+			t.Errorf("%s=%s accepted", k, v)
+		}
+	}
+}
+
+// D56: taxpayer name search is off by default, and refused together with anonymous access.
+func TestLoadTaxpayerSearch(t *testing.T) {
+	c, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a"}, nil))
+	if err != nil || c.SearchTaxpayers || c.TaxpayerRatePerSecond != 1 || c.TaxpayerRateBurst != 10 {
+		t.Fatalf("defaults: %v %+v", err, c)
+	}
+	c, err = Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a", "REGISTER_SEARCH_TAXPAYERS": "true",
+		"REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND": "1", "REGISTER_SEARCH_TAXPAYERS_RATE_BURST": "3"}, nil))
+	if err != nil || !c.SearchTaxpayers || c.TaxpayerRatePerSecond != 1 || c.TaxpayerRateBurst != 3 {
+		t.Fatalf("on: %v %+v", err, c)
+	}
+	if _, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a", "REGISTER_SEARCH_TAXPAYERS": "true",
+		"REGISTER_ALLOW_ANONYMOUS": "true"}, nil)); err == nil {
+		t.Fatal("taxpayer search with anonymous access must be refused")
 	}
 }

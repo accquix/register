@@ -9,7 +9,7 @@ description: "Running an instance: health and freshness checks, what to do when 
 | --- | --- |
 | `GET /livez` | The process is up. |
 | `GET /readyz` | `503` until every source is first published, or when the database is unreachable. |
-| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`, `skippedItems`. |
+| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`, `items` (items kept), `skippedItems` (items with no identifier), `itemsWithoutDic` (new businesses with no DIČ yet). A `diagnostic` starting with `warning:` on a `daily` list: the items with no identifier jumped; the version was applied. |
 
 Alert when:
 
@@ -59,6 +59,11 @@ and `suppress --release --id N --record R` excludes one record for good without 
 revokes one objection and tells you how many records other objections still hide. Export the objections after
 every change (`suppress --export`): they are the only data a rebuild cannot restore. Do not put personal data into
 `--reason`.
+
+A taxpayer without an IČO objects by DIČ: `suppress --subject 2099900051`. That keeps them out of taxpayer name
+search (when it is on) and has no links; a DIČ that belongs to a subject with an IČO is refused, object by the IČO.
+When the DIČ list later gives an objected DIČ an IČO, the sync links that IČO's records to the objection by itself
+(basis `dic_list`, with a warning in the log, like every link); `suppress --list` notes it.
 
 ## Upgrades
 

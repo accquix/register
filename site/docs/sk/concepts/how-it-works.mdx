@@ -21,6 +21,21 @@ nikdy neberie výkon požiadavkám API.
 Nikdy sa nesťahujú: zoznamy IBAN Finančnej správy (ich licencia zakazuje komerčné použitie) a VIES (jeho podmienky
 zakazujú zrkadlenie). Register účtovných závierok (RÚZ) nie je súčasťou v1.
 
+### Zdroje v číslach
+
+Namerané na reálnych súboroch (snapshot RPO zo 7. 11. 2026, zoznamy Finančnej správy z 10. a 12. 11. 2026). Limit
+je počet položiek bez akéhokoľvek identifikátora, ktorý môže mať jeden súbor, kým sa zoznam zablokuje.
+
+| Zdroj | Veľkosť | Ako sa prepája | Limit |
+| --- | --- | --- | --- |
+| RPO | asi 2,28 milióna záznamov, asi 1,1 milióna aktívnych; asi 80 % živnostníci | podľa IČO; 6 626 záznamov ho nemá a uchovávajú sa pod svojím id v RPO | — |
+| `ds_dsrdp` | 1 423 331 položiek: 1 264 931 s DIČ aj IČO, 158 359 len s DIČ (najmä súkromné osoby, napríklad prenajímatelia), 41 bez identifikátora | podľa IČO k RPO; DIČ bez IČO len podľa presného DIČ | 0,05 %, 10–1000 (asi 700) |
+| `ds_dphs` | 319 173 registrácií DPH: §4 226 924, §7a 76 182, §5 9 437, §7 5 158, §4b 1 472 | podľa IČO; člen skupiny DPH podľa IČ DPH | 0,01 %, 10–100 |
+| `ds_iz_ran` | 648 238 | podľa DIČ | 0,01 %, 10–100 |
+| `ds_dphz`, `ds_dphv`, `ds_dpho` | 3 805, 44 284, 1 004 | podľa IČ DPH | 0,01 %, aspoň 10 |
+
+`GET /v1/sources` ukáže to isté pre vašu inštanciu: `items`, `skippedItems`, `itemsWithoutDic`.
+
 ## Synchronizácia
 
 Jeden prechod synchronizácie prejde všetky zdroje a urobí, čo je potrebné. Môžete ho spúšťať často: keď nie je nič
@@ -52,10 +67,19 @@ zmenšil, chyba pri spracovaní, starší dátum zoznamu), sa neaplikuje. Predch
 zdroj prejde do stavu `blocked` s diagnostikou, kým sa naň nepozrie prevádzkovateľ. Pozrite
 [Prevádzka](/sk/self-hosting/operations).
 
-Jeden prípad nie je chyba. Položka zoznamu bez akéhokoľvek identifikátora (bez DIČ, IČO aj IČ DPH) alebo položka
-zoznamu daňových subjektov s IČO, ale zatiaľ bez DIČ, nemôže patriť žiadnemu subjektu, ktorý register vie pomenovať.
-Vynechá sa a započíta (`skippedItems` v `GET /v1/sources`); viac ako 100 v jednom súbore zoznam zablokuje. Takéto
-položky sa nikdy nepriraďujú k firme podľa mena ani adresy.
+Dva prípady nie sú chyby:
+
+- **Nový podnik s IČO a zatiaľ bez DIČ** v zozname daňových subjektov. V RPO je zapísaný o niekoľko dní skôr, než mu
+  Finančná správa pridelí DIČ, takže ho register už nájde a jeho daňová časť je `absent`. Položka sa zo zoznamu
+  daňových subjektov vynechá a započíta (`itemsWithoutDic` v `GET /v1/sources`) bez limitu: je to bežné.
+- **Položka zoznamu bez akéhokoľvek identifikátora** (bez DIČ, IČO aj IČ DPH). Nemôže patriť žiadnemu subjektu, ktorý
+  register vie pomenovať, preto sa vynechá a započíta (`skippedItems`, vedľa `items`, počtu ponechaných položiek).
+  Každý zoznam má limit podľa svojej veľkosti: 0,05 % zoznamu daňových subjektov (dnes asi 700, najviac 1000) a 0,01 %
+  ostatných (najviac 100), nikdy menej ako 10. Nad limitom sa zoznam zablokuje a ostanú predchádzajúce dáta, lebo to
+  ukazuje na pokazený export. Náhly skok v rámci limitu (viac ako trojnásobok predchádzajúcej verzie a o viac ako 20)
+  sa použije s upozornením v `diagnostic` zoznamu.
+
+Ani jedna sa nikdy nepriraďuje k firme podľa mena ani adresy.
 
 ## Vyhľadávacia vrstva
 

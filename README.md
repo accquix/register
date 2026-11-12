@@ -17,7 +17,9 @@ commercial API subscription and no vendor lock-in.
   - the Register of Legal Entities (RPO);
   - the Financial Administration lists: DIČ, IČ DPH and VAT paragraph, risk lists, reliability
     index.
-- **Keeps the mirror current** with daily incremental updates, resumable after any crash.
+- **Keeps the mirror current** with the daily change files of the Register of Legal Entities,
+  applied within the hour of their publication rather than with the next full snapshot, so a new
+  sole trader is found as soon as the ministry publishes the change. Resumable after any crash.
 - **Serves a small HTTP API** (OpenAPI 3.1):
   - one smart search box: company or trader name, IČO, DIČ or IČ DPH. It ignores diacritics and
     word order, matches the start of any word, and can optionally correct typos.

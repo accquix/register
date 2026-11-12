@@ -43,6 +43,31 @@ own counsel for your use.
 | --- | --- |
 | Business name, identifiers, place of business or seat, legal form, register entry, dates, status | Residence when it differs from the place of business, birth data, statutory bodies, stakeholders, representatives |
 
-Natural persons without an IČO, known only by DIČ, are never in name search; a lookup by their exact DIČ returns only
-the DIČ, name and municipality, and only to authenticated callers. Logs contain no queries and no identifiers. The
+The one exception: a taxpayer without an IČO (mostly a private person) has only the address the Financial
+Administration publishes in its DIČ list. It is stored with the row and returned for an exact DIČ to an API key.
+
+## Taxpayers without an IČO
+
+| | Default | With `REGISTER_SEARCH_TAXPAYERS=true` |
+| --- | --- | --- |
+| Exact DIČ, with a key | yes | yes |
+| Full name | no | yes |
+| Part of a name, fuzzy | no | no |
+| DIČ and name | yes | yes |
+| Address as the DIČ list publishes it | yes, by exact DIČ | yes |
+| Anonymous access | never shown | the switch cannot be on |
+| Objections by DIČ | supported (they act on name search) | supported |
+
+<Callout type="warning">
+**Taxpayer addresses are personal data.** The address of a private person, such as a landlord you invoice, is
+personal data, even though the Financial Administration publishes it. An instance that serves it to your applications
+makes you the controller of that processing, and so does turning on the name search. Decide the purpose (for example
+issuing invoices) and its legal basis (Art. 5 and 6 GDPR), give API keys only to the applications that need them,
+tell the people concerned as the law requires, and handle objections with `suppress --subject <DIČ>`. The register
+keeps name search off by default, everything behind API keys, with a per-key limit and no queries in the logs;
+whether your use is lawful is for you and your counsel to assess.
+</Callout>
+
+Natural persons without an IČO, known only by DIČ, are not in name search unless you turn it on, and then only by
+their full name, only to authenticated callers, and never a person who objected. Logs contain no queries and no identifiers. The
 software sends nothing anywhere except requests to the official sources: no telemetry.
