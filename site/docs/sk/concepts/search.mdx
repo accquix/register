@@ -14,7 +14,7 @@ aktívnymi subjektmi. Názvy sa porovnávajú bez diakritiky, bez ohľadu na ve�
 | Vstup | názov alebo presné IČO, DIČ či IČ DPH | presné IČO, DIČ alebo IČ DPH |
 | Odpoveď | najviac 20 kandidátov: názov, identifikátory, adresa, druh, aktívny | jeden subjekt so všetkými časťami: identita, dane, DPH, riziká, každá so zdrojom a dátumom |
 | Zaniknuté subjekty | len podľa identifikátora, s `active: false` | áno |
-| Daňovníci bez IČO | len podľa presného DIČ: DIČ, meno, obec | len podľa presného DIČ: DIČ, meno, obec |
+| Daňovníci bez IČO | podľa presného DIČ; podľa celého mena, len ak to prevádzkovateľ zapne: DIČ, meno, obec | len podľa presného DIČ: DIČ, meno, obec |
 | Subjekty s námietkou | len podľa identifikátora | áno |
 | Na čo | nechať človeka vybrať firmu | overiť fakty skôr, než sa na ne spoľahnete |
 
@@ -57,6 +57,31 @@ Približné vyhľadávanie je **voliteľné a môže byť náročné na procesor
 identifikátorov**. Prevádzkovateľ ho môže vypnúť (`REGISTER_SEARCH_FUZZY=false`); `/v1/capabilities` klientom
 povie, či je zapnuté. Má limit súbežných dopytov, časový limit a, ak ho prevádzkovateľ nastaví, limit požiadaviek na kľúč.
 
+## Daňovníci bez IČO
+
+Asi 159 000 daňovníkov v zozname DIČ Finančnej správy nemá IČO: najmä súkromné osoby, napríklad prenajímatelia.
+Predvolene sa nájdu len podľa presného DIČ. Prevádzkovateľ môže zapnúť ich vyhľadávanie podľa mena
+(`REGISTER_SEARCH_TAXPAYERS=true`); je zámerne užšie ako vyhľadávanie firiem:
+
+- **Len celé meno.** Každé slovo mena a žiadne iné, v ľubovoľnom poradí: `Jana Fiktívna` aj `fiktivna jana` nájdu
+  „Jana Fiktívna“, ale `jana`, `jana fikt` ani `jana fiktivna nova` nie. Diakritika a veľké písmená sa ignorujú.
+- **Len predvolený režim**, nikdy približný, a len s API kľúčom; nikdy na inštancii s anonymným prístupom.
+- **Tie isté tri polia ako pri overení:** DIČ, meno, obec. Nikdy adresa. Karty majú `kind: taxpayer` a sú za
+  firmami, v mieste, ktoré firmy nechajú, najviac päť.
+- **Vlastný limit** na kľúč (1 za sekundu, nárazovo 10: dosť pre človeka, ktorý píše meno, pomaly na hromadné
+  zbieranie). Nad ním vyhľadávanie odpovie bez daňovníkov a odpoveď povie `taxpayers: rate_limited`. Pri jednom
+  kľúči pre celú aplikáciu tento limit zdieľajú všetci jej používatelia: pre vyťaženú aplikáciu ho zvýšte.
+- **Len z čerstvého zoznamu DIČ.** Keď je zastaraný, daňovníci sa nehľadajú (`taxpayers: stale`), takže chýbajúca
+  osoba nikdy nevyzerá ako potvrdená neprítomnosť.
+- **Námietky:** osoba môže namietať podľa DIČ (`suppress --subject <DIČ>`); register ju potom vo vyhľadávaní podľa
+  mena nikdy nevráti, a ak jej zoznam DIČ neskôr pridelí IČO, automaticky sa skryjú aj jej podnikateľské záznamy.
+  Námietka podľa IČO pokryje aj riadok DIČ, ktorý môže patriť tej istej osobe: keď názov subjektu s námietkou
+  obsahuje hľadané celé meno ako susedné slová, nevráti sa preň žiadny daňovník, ani menovci. Obe kontroly bežia pri
+  každom dopyte.
+
+Pole odpovede `taxpayers` hovorí, čo sa stalo: `searched`, `not_searched` (približný režim, menej ako dve slová
+alebo firmy zaplnili limit), `rate_limited` alebo `stale`. Keď je prepínač vypnutý, chýba.
+
 ## Koľko to stojí
 
 Namerané na reálnych dátach (1 017 893 aktívnych subjektov) na malej databáze:
@@ -73,9 +98,9 @@ S oneskorením na strane klienta približne 120 ms pošle píšuci človek jedno
 ## Čo vyhľadávanie nerobí
 
 - Zaniknuté subjekty nie sú vo vyhľadávaní podľa názvu. Presný identifikátor ich nájde s `active: false`.
-- Fyzické osoby bez IČO (daňovníci známi len podľa DIČ) sa nikdy nenájdu podľa mena. Ich presné DIČ zadané do poľa
-  vráti jednu kartu `kind: taxpayer` len s DIČ, menom a obcou, rovnako ako overenie, a nie na inštancii s anonymným
-  prístupom.
+- Fyzické osoby bez IČO (daňovníci známi len podľa DIČ) sa podľa mena nenájdu, kým to prevádzkovateľ nezapne, a
+  potom len podľa celého mena ([vyššie](#daňovníci-bez-ičo)). Ich presné DIČ zadané do poľa vráti jednu kartu
+  `kind: taxpayer` len s DIČ, menom a obcou, rovnako ako overenie, a nie na inštancii s anonymným prístupom.
 - Subjekt vyradený z vyhľadávania po námietke sa stále nájde podľa presného identifikátora.
 - Výsledkov je najviac 20; stránkovanie v1 nemá.
 - Skloňované tvary sú iné slová: `lipa` nenájde „U Lipy“. Napíšte začiatok slova (`lip`) alebo použite približné

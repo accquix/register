@@ -557,7 +557,7 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "Search Slovak companies and sole traders by name, IČO, DIČ or IČ DPH. Diacritics, case, word order and the legal form are ignored; the start of any word matches. Returns up to 20 candidates ordered by relevance. A name match is not a confirmation: resolve a candidate with lookup_subject before stating facts about it. Use mode fuzzy only when the default search found nothing.",
+      "description": "Search Slovak companies and sole traders by name, IČO, DIČ or IČ DPH. Diacritics, case, word order and the legal form are ignored; the start of any word matches. Returns up to 20 candidates ordered by relevance. A name match is not a confirmation: resolve a candidate with lookup_subject before stating facts about it. Use mode fuzzy only when the default search found nothing. Taxpayers without an IČO (kind taxpayer) appear only when the instance allows it and only for their exact full name; the field taxpayers says whether they were searched, and an empty result is never proof that a person does not exist.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -679,6 +679,9 @@
               "null",
               "array"
             ]
+          },
+          "taxpayers": {
+            "type": "string"
           }
         },
         "required": [

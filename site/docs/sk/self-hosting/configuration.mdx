@@ -6,18 +6,33 @@ description: Všetky príkazy programu accquix-register a všetky premenné pros
 Konfigurácia sa číta výlučne z premenných prostredia. Každé tajomstvo `NAME` možno namiesto toho zadať ako
 `NAME_FILE`, cestu k súboru s hodnotou; zadať obe naraz je chyba.
 
+## Prepínače na prvý pohľad
+
+Čo prevádzkovateľ zapína alebo vypína a čo to znamená. Všetko ostatné má bezpečné predvolené hodnoty.
+
+| Prepínač | Predvolene | Keď je zapnutý |
+| --- | --- | --- |
+| `REGISTER_ALLOW_ANONYMOUS` | vypnutý | Obslúžia sa aj požiadavky bez kľúča, obmedzené podľa IP adresy. Fyzické osoby bez IČO sa potom nezobrazia nikdy, ani podľa presného DIČ, a vyhľadávanie daňovníkov nemôže byť zapnuté. |
+| `REGISTER_SEARCH_FUZZY` | zapnutý | `mode=fuzzy` opravuje preklepy v názvoch. Na inštancii vždy len jedno naraz. |
+| `REGISTER_SEARCH_TAXPAYERS` | vypnutý | Vyhľadávanie podľa názvu nájde aj daňovníkov bez IČO (najmä súkromné osoby, napríklad prenajímateľov), **len podľa celého mena**: DIČ, meno a obec, nikdy adresu. Či má vaše použitie právny základ, rozhodujete vy ako prevádzkovateľ; osoba môže namietať (`suppress --subject <DIČ>`). |
+| `REGISTER_MCP` | vypnutý | AI agenti môžu volať API cez `/mcp` s rovnakými kľúčmi a pravidlami. |
+| `REGISTER_RATE_PER_SECOND`, `REGISTER_FUZZY_EVERY` | vypnuté | Limity na API kľúč, pre inštanciu, ktorú zdieľa viac aplikácií. |
+| `REGISTER_FS_MAX_DROP`, `REGISTER_FS_MAX_UNIDENTIFIED`, `REGISTER_FS_SKIP_MIN_ROWS` | vypnuté | Na jeden beh uvoľnia kontrolu, aby sa prijal zoznam, ktorý sa zmenil zo známeho dôvodu. Zapisujú sa do logu pri každom behu. |
+
+Presné overenie podľa IČO, DIČ alebo IČ DPH funguje pri každom prepínači rovnako, rovnako aj námietky.
+
 ## Príkazy
 
 | Príkaz | Čo robí |
 | --- | --- |
 | `migrate [up]` | Aplikuje vstavané migrácie schémy. |
 | `migrate status` | Vypíše migrácie a či je každá aplikovaná. |
-| `migrate down-to N` | Vráti schému na verziu N (0 = prázdna schéma). Na vývoj. |
+| `migrate down-to N` | Vráti schému na verziu N (0 = prázdna schéma). Na vývoj; potom spustite `migrate`, aby sa obnovili práva v databáze. |
 | `sync [--source rpo\|fs\|all]` | Jeden prechod synchronizácie (predvolene `all`). |
 | `sync --every 1h` | Opakuje prechod, kým ho nezastavíte. Neúspešný prechod sa zaloguje; rozvrh pokračuje. |
 | `sync --unblock --source rpo` / `fs:<zoznam>` | Obnoví zdroj po zablokovaní validáciou. |
 | `serve` | HTTP API. |
-| `suppress --subject <IČO> [--reason TEXT]` | Zaznamená námietku: vyradí subjekt z vyhľadávania podľa názvu. Vypíše číslo námietky. |
+| `suppress --subject <IČO> [--reason TEXT]` | Zaznamená námietku: vyradí subjekt z vyhľadávania podľa názvu. Vypíše číslo námietky. DIČ namiesto IČO: daňovník bez IČO, vyradený z vyhľadávania daňovníkov podľa mena. |
 | `suppress --undo --id N` | Odvolá jednu námietku a oznámi, či subjekt stále skrýva iná. |
 | `suppress --list [--id N]` | Vypíše všetky námietky s ich číslami; s `--id` záznamy, ktoré námietka pokrýva, a prečo. |
 | `suppress --release --id N --record R` | Vyjme jeden záznam z námietky (chybné prepojenie); `--unrelease` vyňatie zruší. |
@@ -71,6 +86,8 @@ chyba v príkazovom riadku.
 | `REGISTER_API_KEYS` (tajomstvo) | — | `meno:sha256hex,…`: odtlačky kľúčov. |
 | `REGISTER_ALLOW_ANONYMOUS` | `false` | Prevádzka bez kľúčov; vypne overenie fyzických osôb podľa DIČ. |
 | `REGISTER_SEARCH_FUZZY` | `true` | Zapne `mode=fuzzy`. |
+| `REGISTER_SEARCH_TAXPAYERS` | `false` | Vyhľadávanie podľa názvu nájde aj daňovníkov bez IČO, len podľa celého mena. Vyžaduje API kľúče: s `REGISTER_ALLOW_ANONYMOUS` sa odmietne. Pozri [Ako funguje vyhľadávanie](/sk/concepts/search#daňovníci-bez-ičo). |
+| `REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND` / `_BURST` | `1` / `10` | Vyhľadávania daňovníkov podľa mena na API kľúč. Nad limitom odpoveď neobsahuje daňovníkov a povie to (`taxpayers: rate_limited`). Jeden kľúč pre celú aplikáciu znamená jeden spoločný limit pre všetkých jej používateľov. |
 | `REGISTER_MCP` | `false` | Sprístupní MCP endpoint `/mcp` len na čítanie pre AI agentov. |
 | `REGISTER_MCP_ALLOWED_ORIGINS` | — | Pôvody prehliadača, ktoré smú volať `/mcp`, oddelené čiarkou. Prázdne odmietne všetky. |
 | `REGISTER_MCP_KEY` (tajomstvo) | — | Pre `mcp --url`: API kľúč, ktorý sa posiela inštancii. |

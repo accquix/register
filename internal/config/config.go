@@ -69,6 +69,11 @@ type Config struct {
 	APIKeys        string // REGISTER_API_KEYS (secret): "name:sha256hex,name2:sha256hex"
 	AllowAnonymous bool   // REGISTER_ALLOW_ANONYMOUS, false
 	SearchFuzzy    bool   // REGISTER_SEARCH_FUZZY, true
+	// SearchTaxpayers: name search also finds taxpayers without an IČO by their full name
+	// (REGISTER_SEARCH_TAXPAYERS, false; D56). Refused together with anonymous access.
+	SearchTaxpayers       bool
+	TaxpayerRatePerSecond float64 // REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND, 1 (per key)
+	TaxpayerRateBurst     int     // REGISTER_SEARCH_TAXPAYERS_RATE_BURST, 10
 	// MCP serves the read-only MCP adapter at /mcp (REGISTER_MCP, false; D36).
 	MCP bool
 	// MCPAllowedOrigins are browser origins allowed to call /mcp (REGISTER_MCP_ALLOWED_ORIGINS,
@@ -322,6 +327,12 @@ func (c *Config) loadServe(e Env) error {
 	if c.SearchFuzzy, err = boolVar(e, "REGISTER_SEARCH_FUZZY", true); err != nil {
 		return err
 	}
+	if c.SearchTaxpayers, err = boolVar(e, "REGISTER_SEARCH_TAXPAYERS", false); err != nil {
+		return err
+	}
+	if c.SearchTaxpayers && c.AllowAnonymous {
+		return errors.New("REGISTER_SEARCH_TAXPAYERS=true needs API keys: it is refused together with REGISTER_ALLOW_ANONYMOUS=true (D26, D56)")
+	}
 	if c.MCP, err = boolVar(e, "REGISTER_MCP", false); err != nil {
 		return err
 	}
@@ -344,6 +355,7 @@ func (c *Config) loadServe(e Env) error {
 		def  float64
 	}{
 		{"REGISTER_RATE_PER_SECOND", &c.RatePerSecond, 0},
+		{"REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND", &c.TaxpayerRatePerSecond, 1},
 		{"REGISTER_ANONYMOUS_RATE_PER_SECOND", &c.AnonRatePerSecond, 20},
 	} {
 		if s := e.Getenv(v.name); s == "" {
@@ -359,6 +371,7 @@ func (c *Config) loadServe(e Env) error {
 	}{
 		{"REGISTER_RATE_BURST", &c.RateBurst, int(math.Ceil(2 * c.RatePerSecond))},
 		{"REGISTER_ANONYMOUS_RATE_BURST", &c.AnonRateBurst, 40},
+		{"REGISTER_SEARCH_TAXPAYERS_RATE_BURST", &c.TaxpayerRateBurst, 10},
 		{"REGISTER_FUZZY_CONCURRENCY", &c.FuzzyConcurrent, 1},
 		{"REGISTER_SEARCH_WORD_STEP_MAX", &c.WordStepMax, 1000},
 		{"REGISTER_SEARCH_WORD_CAP", &c.WordCap, 1000},

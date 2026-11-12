@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/accquix/register/internal/api"
 	"github.com/accquix/register/internal/ingest"
@@ -44,8 +47,12 @@ func (s *safeBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 func populate(t *testing.T, dsn string) {
 	ctx := context.Background()
 	conn := testkit.Conn(t, dsn)
-	if err := ingest.ConfirmNoObjections(ctx, conn); err != nil { // a new installation
+	if ok, err := ingest.SetupConfirmed(ctx, conn); err != nil {
 		t.Fatal(err)
+	} else if !ok {
+		if err := ingest.ConfirmNoObjections(ctx, conn); err != nil { // a new installation
+			t.Fatal(err)
+		}
 	}
 	day := func(d int) string { return time.Now().UTC().AddDate(0, 0, d).Format("2006-01-02") }
 	sk := func(d int) string { return time.Now().UTC().AddDate(0, 0, d).Format("02.01.2006") }
@@ -81,7 +88,12 @@ func populate(t *testing.T, dsn string) {
 	person := testkit.TaxItem(50, "")                                              // a natural person without an IČO
 	noID := testkit.Item{"NAZOV_DS": "Fiktívna Osoba Bez Identifikátora"}          // OQ-37: left out and counted
 	newBiz := testkit.Item{"ICO": "99900008", "NAZOV_DS": "Nová Fiktívna Živnosť"} // D52: an IČO, no DIČ yet
-	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day(0), []testkit.Item{tax1, noID, person, noID, newBiz}))
+	// D56: taxpayers without an IČO for the full-name search: two namesakes (the same words in
+	// another order) and a longer name that contains theirs
+	named := func(n int, name string) testkit.Item { it := testkit.TaxItem(n, ""); it["NAZOV_DS"] = name; return it }
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day(0), []testkit.Item{tax1, noID, person, noID, newBiz,
+		named(51, "Jana Fiktívna"), named(52, "FIKTÍVNA Jana"), named(53, "Jana Fiktívna Malá"),
+		named(54, "Ján Fiktívny")})) // the sole trader 99900004's own name, under a personal DIČ
 	srv.Put("ds_iz_ran", testkit.FSZip("ds_iz_ran", day(0), []testkit.Item{{"DIC": "2099900001", "ICO": "99900001", "IDS": "spoľahlivý"}}))
 	srv.Put("ds_dphz", testkit.FSZip("ds_dphz", day(0), nil))
 	srv.Put("ds_dphv", testkit.FSZip("ds_dphv", day(0), nil))
@@ -514,4 +526,252 @@ func TestBootstrapping(t *testing.T) {
 	if code, _, _ := e.get(t, "/livez", false); code != 200 {
 		t.Fatal("livez must not depend on data")
 	}
+}
+
+// D56: taxpayers without an IČO are found by name only when the operator turns it on, only by the
+// full name, only in the default mode, only with an API key, within their own limit, and never
+// when they objected. Exact identifiers are not affected by any of it.
+func TestTaxpayerNameSearch(t *testing.T) {
+	ctx := context.Background()
+	dsn := testkit.Database(t)
+	populate(t, dsn)
+	conn := testkit.Conn(t, dsn)
+	taxpayers := func(m map[string]any) []string {
+		var out []string
+		for _, r := range m["results"].([]any) {
+			if path(r, "kind") == "taxpayer" {
+				if path(r, "address") != nil || path(r, "ico") != nil {
+					t.Fatalf("a taxpayer card carries only the DIČ, name and municipality: %v", r)
+				}
+				out = append(out, path(r, "dic").(string))
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	want := func(t *testing.T, e env, qq, status string, dics ...string) {
+		t.Helper()
+		code, _, m := e.get(t, "/v1/search?q="+q(qq), true)
+		if got := strings.Join(taxpayers(m), ","); code != 200 || got != strings.Join(dics, ",") || (m["taxpayers"] != nil || status != "") && m["taxpayers"] != status {
+			t.Fatalf("%q: %d, taxpayers %q (%v), want %q (%s)", qq, code, got, m["taxpayers"], strings.Join(dics, ","), status)
+		}
+	}
+
+	t.Run("off by default", func(t *testing.T) {
+		e := start(t, dsn, nil)
+		want(t, e, "Jana Fiktívna", "")
+		if _, _, m := e.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "enabled") != false {
+			t.Fatalf("capabilities: %v", m)
+		}
+		d := start(t, dsn, func(c *api.Config) { c.SearchTaxpayers = true })
+		if _, _, m := d.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "perSecond") != float64(1) || path(m, "taxpayerSearch", "burst") != float64(10) {
+			t.Fatalf("default taxpayer limit: %v", m)
+		}
+	})
+
+	on := start(t, dsn, func(c *api.Config) {
+		c.SearchTaxpayers, c.TaxpayerRatePerSecond, c.TaxpayerRateBurst = true, 1000, 1000
+	})
+	t.Run("the full name only, in any word order", func(t *testing.T) {
+		want(t, on, "Jana Fiktívna", "searched", "2099900051", "2099900052")
+		want(t, on, "fiktivna JANA", "searched", "2099900051", "2099900052")
+		want(t, on, "Jana Fiktívna Malá", "searched", "2099900053")
+		want(t, on, "jana", "not_searched")           // one word is never a full name
+		want(t, on, "jana fikt", "searched")          // no prefixes
+		want(t, on, "jana fiktivna mal", "searched")  // no prefixes
+		want(t, on, "jana fiktivna nova", "searched") // no other words
+		want(t, on, "jana fiktivn", "searched")       // no typos
+		want(t, on, "zlata rybka", "searched")        // a company name finds no taxpayer
+		if _, _, m := on.get(t, "/v1/search?mode=fuzzy&q="+q("jana fiktivna"), true); len(taxpayers(m)) != 0 || m["taxpayers"] != "not_searched" {
+			t.Fatalf("fuzzy never searches taxpayers: %v", m)
+		}
+		if _, _, m := on.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "enabled") != true || path(m, "taxpayerSearch", "match") != "full_name" ||
+			path(m, "taxpayerSearch", "burst") != float64(1000) {
+			t.Fatalf("capabilities: %v", m)
+		}
+	})
+
+	t.Run("after the businesses, never instead of them", func(t *testing.T) {
+		code, _, m := on.get(t, "/v1/search?limit=1&q="+q("Ján Fiktívny"), true)
+		if code != 200 || len(names(m)) != 1 || len(taxpayers(m)) != 0 || m["taxpayers"] != "not_searched" {
+			t.Fatalf("a business that fills the limit stays: %v", m)
+		}
+		want(t, on, "Ján Fiktívny", "searched", "2099900054")
+	})
+
+	t.Run("a stale DIČ list never answers for taxpayers", func(t *testing.T) {
+		if _, err := conn.Exec(ctx, `UPDATE sync_source SET published_as_of = published_as_of - 30 WHERE source = 'fs:ds_dsrdp'`); err != nil {
+			t.Fatal(err)
+		}
+		want(t, on, "Jana Fiktívna", "stale")
+		if _, err := conn.Exec(ctx, `UPDATE sync_source SET published_as_of = published_as_of + 30 WHERE source = 'fs:ds_dsrdp'`); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("their own limit, and the search still answers", func(t *testing.T) {
+		lim := start(t, dsn, func(c *api.Config) { c.SearchTaxpayers, c.TaxpayerRatePerSecond, c.TaxpayerRateBurst = true, 0.001, 1 })
+		want(t, lim, "jana", "not_searched") // a query that cannot match costs nothing
+		want(t, lim, "Jana Fiktívna", "searched", "2099900051", "2099900052")
+		want(t, lim, "Jana Fiktívna", "rate_limited")
+		if _, _, m := lim.get(t, "/v1/search?q=rybka", true); len(names(m)) == 0 {
+			t.Fatal("over the taxpayer limit, companies are still found")
+		}
+	})
+
+	t.Run("an objection by DIČ keeps the taxpayer out of name search only", func(t *testing.T) {
+		id, cov, err := ingest.AddObjection(ctx, conn, "2099900051", "ticket-9")
+		if err != nil || cov.Records != 1 || cov.Hidden != 1 {
+			t.Fatalf("objection: %v %+v", err, cov)
+		}
+		want(t, on, "Jana Fiktívna", "searched", "2099900052")
+		if code, _, m := on.get(t, "/v1/lookup/2099900051", true); code != 200 || path(m, "taxpayer", "dic") != "2099900051" {
+			t.Fatalf("exact lookup is unaffected: %d %v", code, m)
+		}
+		if _, _, m := on.get(t, "/v1/search?q=2099900051", true); strings.Join(taxpayers(m), ",") != "2099900051" {
+			t.Fatalf("the exact DIČ in the box is unaffected: %v", m)
+		}
+		if _, err := ingest.ReleaseLink(ctx, conn, id, 51, "", true); err == nil {
+			t.Fatal("an objection by DIČ has no links to release")
+		}
+		if _, err := ingest.RevokeObjection(ctx, conn, id); err != nil {
+			t.Fatal(err)
+		}
+		want(t, on, "Jana Fiktívna", "searched", "2099900051", "2099900052")
+		if _, _, err := ingest.AddObjection(ctx, conn, "2099900001", ""); !errors.Is(err, ingest.ErrDICHasICO) {
+			t.Fatalf("the DIČ of a subject with an IČO: object by the IČO: %v", err)
+		}
+	})
+
+	t.Run("an objection by IČO also hides a taxpayer row with the objected subject's name", func(t *testing.T) {
+		id, _, err := ingest.AddObjection(ctx, conn, "99900004", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// the sole trader's records are out of name search, and so is the DIČ row that may be theirs
+		want(t, on, "Ján Fiktívny", "searched")
+		if _, err := ingest.RevokeObjection(ctx, conn, id); err != nil {
+			t.Fatal(err)
+		}
+		want(t, on, "Ján Fiktívny", "searched", "2099900054")
+	})
+
+	t.Run("a person who objected by DIČ and then appears in RPO stays hidden", func(t *testing.T) {
+		id, _, err := ingest.AddObjection(ctx, conn, "2099900054", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dsrdp, _ := fs.ListBySlug("ds_dsrdp")
+		day := time.Now().UTC().Format("2006-01-02")
+		named := func(n int, ico, name string) testkit.Item {
+			it := testkit.TaxItem(n, ico)
+			it["NAZOV_DS"] = name
+			return it
+		}
+		version := func(ico54 string) {
+			t.Helper()
+			srv := testkit.NewFSServer(t)
+			srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, []testkit.Item{testkit.TaxItem(1, "99900001"), testkit.TaxItem(50, ""),
+				named(51, "", "Jana Fiktívna"), named(52, "", "FIKTÍVNA Jana"), named(53, "", "Jana Fiktívna Malá"), named(54, ico54, "Ján Fiktívny")}))
+			if err := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), SkipMinRows: true, MaxDrop: 1,
+				Lists: []fs.List{dsrdp}}).Run(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		visible := func() bool {
+			_, _, m := on.get(t, "/v1/search?q="+q("kadernictvo lucia"), true)
+			return len(names(m)) > 0
+		}
+		if !visible() {
+			t.Fatal("the sole trader must be in name search before the DIČ list ties the DIČ to the IČO")
+		}
+		version("99900004") // the DIČ list now gives the objected DIČ the sole trader's IČO
+		if visible() {
+			t.Fatal("the person objected by DIČ: their RPO records must leave name search on their own")
+		}
+		lst, _ := ingest.ListObjections(ctx, conn)
+		for _, o := range lst {
+			if o.ID == id && (len(o.Links) == 0 || o.Links[0].Basis != ingest.BasisDICList || o.DICHasICO != "99900004") {
+				t.Fatalf("the link must be recorded with its basis: %+v", o)
+			}
+		}
+		version("") // the IČO disappears from the DIČ list again: the link stays (I2)
+		if visible() {
+			t.Fatal("a link stays when the DIČ list changes again")
+		}
+		if _, err := ingest.RevokeObjection(ctx, conn, id); err != nil {
+			t.Fatal(err)
+		}
+		if !visible() {
+			t.Fatal("after the undo the sole trader is back")
+		}
+	})
+
+	t.Run("an objection by DIČ whose row gains an IČO is flagged", func(t *testing.T) {
+		id, _, err := ingest.AddObjection(ctx, conn, "2099900053", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, `UPDATE fs_tax_subject SET ico = '99900053' WHERE dic = '2099900053'`); err != nil {
+			t.Fatal(err)
+		}
+		lst, err := ingest.ListObjections(ctx, conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range lst {
+			if o.ID == id && o.DICHasICO != "99900053" {
+				t.Fatalf("not flagged: %+v", o)
+			}
+		}
+		if _, err := conn.Exec(ctx, `UPDATE fs_tax_subject SET ico = NULL WHERE dic = '2099900053'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ingest.RevokeObjection(ctx, conn, id); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a restored objection by DIČ holds in a rebuilt database", func(t *testing.T) {
+		if _, _, err := ingest.AddObjection(ctx, conn, "2099900052", ""); err != nil {
+			t.Fatal(err)
+		}
+		backup, err := ingest.ListObjections(ctx, conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fresh := testkit.Database(t)
+		if _, err := ingest.RestoreObjections(ctx, testkit.Conn(t, fresh), backup); err != nil {
+			t.Fatal(err)
+		}
+		populate(t, fresh)
+		e := start(t, fresh, func(c *api.Config) { c.SearchTaxpayers = true })
+		want(t, e, "Jana Fiktívna", "searched", "2099900051")
+		// and the restore added the revoked one as revoked: 51 is findable, 52 is not
+		lst, err := ingest.ListObjections(ctx, testkit.Conn(t, fresh))
+		if err != nil || len(lst) != len(backup) {
+			t.Fatalf("restored: %d of %d, %v", len(lst), len(backup), err)
+		}
+	})
+
+	t.Run("never on an instance with anonymous access", func(t *testing.T) {
+		anon := start(t, dsn, func(c *api.Config) { c.SearchTaxpayers, c.AllowAnonymous = true, true })
+		for _, withKey := range []bool{true, false} {
+			if _, _, m := anon.get(t, "/v1/search?q="+q("Jana Fiktívna"), withKey); len(taxpayers(m)) != 0 || m["taxpayers"] != nil {
+				t.Fatalf("anonymous instance (key %v): %v", withKey, m)
+			}
+		}
+	})
+
+	t.Run("MCP gives the same", func(t *testing.T) {
+		e := start(t, dsn, func(c *api.Config) { c.SearchTaxpayers, c.MCP = true, true })
+		cs, err := connect(t, e, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := callTool(t, cs, "search_subjects", map[string]any{"q": "Jana Fiktívna"}).Content[0].(*mcp.TextContent).Text
+		if !strings.Contains(text, "2099900051") || strings.Contains(text, "2099900052") {
+			t.Fatalf("MCP: the objection must hold, the other namesake must be found: %s", text)
+		}
+	})
 }

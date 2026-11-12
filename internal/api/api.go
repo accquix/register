@@ -45,8 +45,14 @@ type Config struct {
 	AnonFuzzyEvery    time.Duration
 	FuzzyConcurrent   int
 	FuzzyTimeout      time.Duration
-	QueryTimeout      time.Duration
-	Search            search.Config
+	// SearchTaxpayers lets name search find taxpayers without an IČO by their full name
+	// (REGISTER_SEARCH_TAXPAYERS, D56). Never on an instance with anonymous access.
+	SearchTaxpayers bool
+	// per API key; zero: 1/s, burst 10. Over it, a search answers without taxpayers.
+	TaxpayerRatePerSecond float64
+	TaxpayerRateBurst     int
+	QueryTimeout          time.Duration
+	Search                search.Config
 	// MCP serves the read-only MCP adapter at /mcp (REGISTER_MCP, D36).
 	MCP bool
 	// MCPAllowedOrigins are browser origins allowed to call /mcp; empty refuses every
@@ -69,6 +75,7 @@ type Server struct {
 	keys     Keys
 	limiter  limiters
 	fuzzyLim limiters
+	taxLim   *limiter
 	fuzzySem chan struct{}
 	slots    chan struct{}
 	log      *slog.Logger
@@ -91,6 +98,15 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 	if cfg.RatePerSecond > 0 && cfg.RateBurst <= 0 {
 		cfg.RateBurst = int(math.Ceil(2 * cfg.RatePerSecond))
 	}
+	if cfg.AllowAnonymous {
+		cfg.SearchTaxpayers = false // config refuses the pair; never serve it either (D26, D56)
+	}
+	if cfg.TaxpayerRatePerSecond <= 0 {
+		cfg.TaxpayerRatePerSecond, cfg.TaxpayerRateBurst = 1, 10
+	}
+	if cfg.TaxpayerRateBurst <= 0 {
+		cfg.TaxpayerRateBurst = int(math.Ceil(10 * cfg.TaxpayerRatePerSecond))
+	}
 	if cfg.MaxInFlight <= 0 {
 		cfg.MaxInFlight = 10
 		if pool != nil {
@@ -112,6 +128,7 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 			key:  newLimiterEvery(cfg.FuzzyEvery, 2),
 			anon: newLimiterEvery(cfg.AnonFuzzyEvery, 2),
 		},
+		taxLim:   newLimiter(cfg.TaxpayerRatePerSecond, cfg.TaxpayerRateBurst),
 		fuzzySem: make(chan struct{}, cfg.FuzzyConcurrent),
 		slots:    make(chan struct{}, cfg.MaxInFlight),
 	}
@@ -145,13 +162,13 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 // Card is one search result.
 type Card struct {
 	ICO          string `json:"ico,omitempty"`
-	DIC          string `json:"dic,omitempty" doc:"kind taxpayer only: the DIČ typed into the box"`
+	DIC          string `json:"dic,omitempty" doc:"kind taxpayer only: the taxpayer's DIČ"`
 	Name         string `json:"name" doc:"Display name, with diacritics and legal form"`
 	MatchedName  string `json:"matchedName,omitempty" doc:"The official name that matched, when it is not the display name"`
 	Municipality string `json:"municipality,omitempty"`
 	// The same record and order as the lookup's identity section, so both show one address.
 	Address *lookup.Address `json:"address,omitempty" doc:"The registered seat or place of business, as published in RPO"`
-	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other,taxpayer" doc:"taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list; only the name and municipality, as in the lookup, and never on an instance with anonymous access"`
+	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other,taxpayer" doc:"taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayer search on (D56); only the name and municipality, as in the lookup, and never on an instance with anonymous access"`
 	Active  bool            `json:"active"`
 	Typos   int             `json:"typos,omitempty" doc:"fuzzy only: corrections needed"`
 }
@@ -167,6 +184,7 @@ type SearchBody struct {
 	Results     []Card   `json:"results"`
 	Corrections []string `json:"corrections,omitempty" doc:"fuzzy: corrected words"`
 	DataAsOf    string   `json:"dataAsOf,omitempty" doc:"As-of date of the RPO data the search layer is built from"`
+	Taxpayers   string   `json:"taxpayers,omitempty" enum:"searched,not_searched,rate_limited,stale" doc:"Only when the instance searches taxpayers without an IČO by name (D56): searched; not_searched (fuzzy mode, fewer than two words, or the businesses filled the limit: only a full name is matched, after the businesses); rate_limited (the results are without taxpayers, retry later); stale (the DIČ list is not fresh, so taxpayers were not searched: their absence means nothing)"`
 	Attribution []string `json:"attribution"`
 }
 
@@ -234,7 +252,13 @@ type CapabilitiesBody struct {
 	Version        string `json:"version"`
 	Anonymous      bool   `json:"anonymous" doc:"Anonymous access is enabled"`
 	TaxpayerLookup bool   `json:"taxpayerLookup" doc:"Lookup of natural persons without an IČO by DIČ"`
-	Search         struct {
+	TaxpayerSearch struct {
+		Enabled   bool    `json:"enabled"`
+		Match     string  `json:"match,omitempty" enum:"full_name" doc:"Every word of the name and no other, in any order; no prefixes, no fuzzy"`
+		PerSecond float64 `json:"perSecond,omitempty" doc:"Taxpayer searches per API key per second; over it a search answers without taxpayers"`
+		Burst     int     `json:"burst,omitempty"`
+	} `json:"taxpayerSearch" doc:"Name search for taxpayers without an IČO (D56), off by default"`
+	Search struct {
 		Modes    []string `json:"modes"`
 		LimitMax int      `json:"limitMax"`
 	} `json:"search"`
@@ -369,7 +393,47 @@ func (s *Server) search(ctx context.Context, in *SearchInput) (*SearchOutput, er
 		return nil, dbError(err)
 	}
 	out.Body.Results, out.Body.Corrections = cards, res.Fixes
+	if s.cfg.SearchTaxpayers {
+		if err := s.addTaxpayers(ctx, rd, in, core, &out.Body); err != nil {
+			return nil, dbError(err)
+		}
+	}
 	return out, nil
+}
+
+// addTaxpayers adds the taxpayers without an IČO whose full name the query is (D56): only in the
+// default mode, only for an API key, within the taxpayer limit of the key, and only from a fresh
+// DIČ list (a stale one never says "no such taxpayer"). They come after the subjects, in the room
+// the subjects leave, at most search.TaxpayerMax.
+func (s *Server) addTaxpayers(ctx context.Context, rd ready, in *SearchInput, core string, b *SearchBody) error {
+	p := principal(ctx)
+	if !p.Authenticated {
+		return nil
+	}
+	room := min(in.Limit-len(b.Results), search.TaxpayerMax)
+	if _, n := search.NameKey(core); in.Mode == "fuzzy" || n < 2 || room < 1 {
+		b.Taxpayers = "not_searched"
+		return nil
+	}
+	if !lookup.Fresh(rd.srcs, "fs:ds_dsrdp") {
+		b.Taxpayers = "stale"
+		return nil
+	}
+	if ok, _ := s.taxLim.allow(p.Bucket); !ok {
+		b.Taxpayers = "rate_limited"
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
+	defer cancel()
+	tps, err := s.searcher.Taxpayers(ctx, core, room)
+	if err != nil {
+		return err
+	}
+	b.Taxpayers = "searched"
+	for _, t := range tps {
+		b.Results = append(b.Results, Card{DIC: t.DIC, Name: t.Name, Municipality: t.Municipality, Kind: "taxpayer", Active: true})
+	}
+	return nil
 }
 
 // cards turns hits into result cards with the subject's display name.
@@ -652,6 +716,10 @@ func (s *Server) capabilities(ctx context.Context, _ *struct{}) (*CapabilitiesOu
 		}
 	}
 	b.APIVersion, b.Version, b.Anonymous, b.TaxpayerLookup = APIVersion, s.cfg.Version, s.cfg.AllowAnonymous, !s.cfg.AllowAnonymous
+	if s.cfg.SearchTaxpayers {
+		b.TaxpayerSearch.Enabled, b.TaxpayerSearch.Match = true, "full_name"
+		b.TaxpayerSearch.PerSecond, b.TaxpayerSearch.Burst = s.cfg.TaxpayerRatePerSecond, s.cfg.TaxpayerRateBurst
+	}
 	b.Search.Modes, b.Search.LimitMax = []string{"default"}, 20
 	b.Fuzzy.Enabled = s.cfg.Fuzzy
 	b.Fuzzy.Note = "Fuzzy search is optional, potentially CPU-intensive, and never substitutes exact identifier matching."

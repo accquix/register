@@ -133,3 +133,20 @@ func TestLoadLimits(t *testing.T) {
 		}
 	}
 }
+
+// D56: taxpayer name search is off by default, and refused together with anonymous access.
+func TestLoadTaxpayerSearch(t *testing.T) {
+	c, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a"}, nil))
+	if err != nil || c.SearchTaxpayers || c.TaxpayerRatePerSecond != 1 || c.TaxpayerRateBurst != 10 {
+		t.Fatalf("defaults: %v %+v", err, c)
+	}
+	c, err = Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a", "REGISTER_SEARCH_TAXPAYERS": "true",
+		"REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND": "1", "REGISTER_SEARCH_TAXPAYERS_RATE_BURST": "3"}, nil))
+	if err != nil || !c.SearchTaxpayers || c.TaxpayerRatePerSecond != 1 || c.TaxpayerRateBurst != 3 {
+		t.Fatalf("on: %v %+v", err, c)
+	}
+	if _, err := Load(env(map[string]string{"REGISTER_DATABASE_URL": "postgres://a", "REGISTER_SEARCH_TAXPAYERS": "true",
+		"REGISTER_ALLOW_ANONYMOUS": "true"}, nil)); err == nil {
+		t.Fatal("taxpayer search with anonymous access must be refused")
+	}
+}

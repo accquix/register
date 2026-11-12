@@ -97,6 +97,7 @@ func TestObjectionBackupRoundTrip(t *testing.T) {
 			{RecordID: 900000005, Basis: ingest.BasisCarriedICO, Source: "rpo:actual_2026-11-09.json.gz", CreatedAt: at, ReleasedAt: &revoked, ReleasedReason: "note\twith\ta tab"},
 		}},
 		{ID: 2, Key: "r900000006", CreatedAt: at, RevokedAt: &revoked},
+		{ID: 3, Key: "2099900051", Reason: "a taxpayer without an IČO (D56)", CreatedAt: at},
 	}
 	var buf bytes.Buffer
 	if err := writeObjections(&buf, rows); err != nil {
@@ -106,7 +107,7 @@ func TestObjectionBackupRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Key != "99900004" || got[0].Reason != "ticket 12 with a tab" || !got[0].CreatedAt.Equal(at) ||
+	if len(got) != 3 || got[2].Key != "2099900051" || got[0].Key != "99900004" || got[0].Reason != "ticket 12 with a tab" || !got[0].CreatedAt.Equal(at) ||
 		len(got[0].Links) != 2 || got[0].Links[0].Basis != ingest.BasisAtObjection || got[0].Links[1].RecordID != 900000005 ||
 		got[0].Links[1].Source != "rpo:actual_2026-11-09.json.gz" || got[0].Links[1].ReleasedAt == nil || !got[0].Links[1].ReleasedAt.Equal(revoked) ||
 		got[0].Links[1].ReleasedReason != "note\twith\ta tab" || got[0].RevokedAt != nil ||

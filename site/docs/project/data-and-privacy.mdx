@@ -43,6 +43,8 @@ own counsel for your use.
 | --- | --- |
 | Business name, identifiers, place of business or seat, legal form, register entry, dates, status | Residence when it differs from the place of business, birth data, statutory bodies, stakeholders, representatives |
 
-Natural persons without an IČO, known only by DIČ, are never in name search; their exact DIČ, in the lookup or in the
-search box, returns only the DIČ, name and municipality, and only to authenticated callers. Logs contain no queries and no identifiers. The
+Natural persons without an IČO, known only by DIČ, are not in name search unless the operator turns it on
+(`REGISTER_SEARCH_TAXPAYERS`), and then only by their full name. Either way the register returns only the DIČ, name
+and municipality, only to authenticated callers, and never a person who objected. Whether a given use of that search
+has a legal basis is the operator's decision. Logs contain no queries and no identifiers. The
 software sends nothing anywhere except requests to the official sources: no telemetry.

@@ -60,6 +60,11 @@ zruší jednu námietku a oznámi, koľko záznamov stále skrývajú iné námi
 (`suppress --export`): sú to jediné dáta, ktoré opätovné zostavenie neobnoví. Do `--reason` nezapisujte osobné
 údaje.
 
+Daňovník bez IČO namieta podľa DIČ: `suppress --subject 2099900051`. Vyradí ho to z vyhľadávania daňovníkov podľa
+mena (ak je zapnuté) a nemá prepojenia; DIČ subjektu, ktorý má IČO, sa odmietne, namietajte podľa IČO.
+Keď zoznam DIČ neskôr pridelí namietanému DIČ IČO, synchronizácia sama prepojí záznamy s týmto IČO s námietkou
+(dôvod `dic_list`, s upozornením v logu ako pri každom prepojení); `suppress --list` to uvedie.
+
 ## Aktualizácie
 
 1. Stiahnite alebo zostavte nový obraz.

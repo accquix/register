@@ -61,7 +61,7 @@ func matrix(r Roles, maintain bool) []roleGrants {
 		{r.Sync, []grant{
 			{write, join(mirror, search, stage, state)},
 			// The sync needs which keys are objected, not why: no reason column, no notes.
-			{"SELECT (id, ico, rpo_id, created_at, revoked_at)", []string{"objection"}},
+			{"SELECT (id, ico, rpo_id, dic, created_at, revoked_at)", []string{"objection"}},
 			{"SELECT (objection_id, rpo_id, basis, source, created_at, released_at)", []string{"objection_record"}},
 			{"SELECT, UPDATE (search_rebuild_pending)", []string{"register_setup"}}, // the rebuild after an upgrade
 			{"INSERT", []string{"objection_record"}},                                // links of records that carry an objected IČO
@@ -173,6 +173,13 @@ WHERE s.relkind = 'S' AND n.nspname = 'public' AND t.relname = ANY($1) ORDER BY 
 			return err
 		}
 	}
+	// The taxpayer name search calls register_name_key (D56). Name the right instead of relying on
+	// PostgreSQL's default EXECUTE for PUBLIC, which a hardened database may have removed.
+	if r.API != "" {
+		if err := exec("GRANT EXECUTE ON FUNCTION public.register_name_key(text) TO " + pgx.Identifier{r.API}.Sanitize()); err != nil {
+			return err
+		}
+	}
 	if err := verify(ctx, tx, r); err != nil {
 		return err
 	}
@@ -233,6 +240,15 @@ func verify(ctx context.Context, tx pgx.Tx, r Roles) error {
 	deny(r.Sync, "the sync may only add links", "UPDATE, DELETE, TRUNCATE", "objection_record")
 	deny(r.Operator, "the operator must not write register data", write, join(mirror, stage, state)...)
 	deny(r.Operator, "an objection is never deleted", "DELETE, TRUNCATE", "objection", "objection_record")
+	if r.API != "" {
+		var can bool
+		if err := tx.QueryRow(ctx, `SELECT has_function_privilege($1, 'public.register_name_key(text)', 'EXECUTE')`, r.API).Scan(&can); err != nil {
+			return err
+		}
+		if !can {
+			return fmt.Errorf("role %q cannot execute register_name_key: the taxpayer name search would fail", r.API)
+		}
+	}
 	// The sync reads which keys are objected, never why.
 	if r.Sync != "" {
 		for table, column := range map[string]string{"objection": "reason", "objection_record": "released_reason"} {

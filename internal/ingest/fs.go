@@ -35,6 +35,8 @@ type FSResult struct {
 	Inserted   int
 	Updated    int
 	Absent     int64 // rows marked absent
+	// Linked: DIČ list only, objection id → RPO records linked to it in this unit (D56)
+	Linked map[int64]int
 }
 
 var fsStageCols = []string{"k", "dataset", "ic_dph", "dic", "ico", "name", "name_core", "municipality", "postal_code", "street",
@@ -183,6 +185,15 @@ SELECT count(*) FILTER (WHERE inserted)::int, count(*) FILTER (WHERE NOT inserte
 		return res, err
 	}
 	res.Absent = tag.RowsAffected()
+	if u.List.Target == fs.TaxSubjects {
+		// D56: a DIČ with an objection that the list now gives an IČO links that IČO's RPO records
+		if res.Linked, err = syncObjections(ctx, tx, BasisCarriedICO, u.Name); err != nil {
+			return res, err
+		}
+		if err := refreshDICLinked(ctx, tx); err != nil {
+			return res, err
+		}
+	}
 
 	detail := fmt.Sprintf("list date %s; %d duplicates (%d conflicting)", res.AsOf.Format("2006-01-02"), res.Duplicates, res.Conflicts)
 	if _, err := tx.Exec(ctx, `INSERT INTO sync_unit (unit, source, sha256, records, inserted, updated, absent, status, detail)

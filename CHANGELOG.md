@@ -29,6 +29,9 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
   ignored, the start of any word matched; an adaptive default mode and an optional fuzzy mode.
   Every result carries the full address (D37). The exact DIČ of a taxpayer without an IČO gives a
   card of `kind: taxpayer` with the DIČ, name and municipality only, as the lookup does (D54).
+- **Taxpayer name search**, off by default (`REGISTER_SEARCH_TAXPAYERS`): taxpayers without an IČO
+  by their full name only, in the default mode, with an API key, within a separate per-key limit;
+  the response field `taxpayers` says whether they were searched (D56).
 - **Lookup** `GET /v1/lookup/{id}` by IČO, DIČ or IČ DPH, with sections `identity`, `tax`, `vat`
   and `risk`, each `present`, `absent` or `unknown`, with its source, as-of date and a content
   version; `POST /v1/lookup:batch` for up to 100 identifiers, with `fields: "versions"` for daily
@@ -43,7 +46,8 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
   linked record stays hidden when it loses or changes its IČO. `suppress --list --id N` shows the
   links, `suppress --release --id N --record R` excludes one wrongly linked record for good
   (`--unrelease` withdraws it), and `suppress --undo --id N` revokes one objection (D42). The rules
-  are fixed in `docs/objection-invariants.md`.
+  are fixed in `docs/objection-invariants.md`. A taxpayer without an IČO objects by DIČ
+  (`suppress --subject <DIČ>`), which keeps them out of taxpayer name search (D56).
 - **Objection backup**: `suppress --export --output FILE` and `suppress --restore FILE`. The file
   (format `objections-v3`) is tab-separated with a count and checksum trailer and carries the
   links, releases and revocations. An export is atomic and replaces a file only when the file is a

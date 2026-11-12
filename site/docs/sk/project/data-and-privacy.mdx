@@ -43,6 +43,8 @@ právnym poradcom pre svoje použitie.
 | --- | --- |
 | Obchodné meno, identifikátory, miesto podnikania alebo sídlo, právnu formu, zápis v registri, dátumy, stav | Bydlisko, ak sa líši od miesta podnikania, dátum narodenia, štatutárne orgány, spoločníkov, zástupcov |
 
-Fyzické osoby bez IČO, známe len podľa DIČ, nie sú nikdy vo vyhľadávaní podľa názvu; ich presné DIČ, pri overení aj
-vo vyhľadávacom poli, vráti len DIČ, meno a obec, a to iba overeným klientom. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
+Fyzické osoby bez IČO, známe len podľa DIČ, nie sú vo vyhľadávaní podľa názvu, kým to prevádzkovateľ nezapne
+(`REGISTER_SEARCH_TAXPAYERS`), a potom len podľa celého mena. Register v každom prípade vráti len DIČ, meno a obec,
+iba overeným klientom a nikdy osobu, ktorá namietala. Či má konkrétne použitie takého vyhľadávania právny základ,
+rozhoduje prevádzkovateľ. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
 nič nikam okrem požiadaviek na oficiálne zdroje: žiadna telemetria.

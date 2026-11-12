@@ -111,6 +111,9 @@ components:
         taxpayerLookup:
           description: Lookup of natural persons without an IČO by DIČ
           type: boolean
+        taxpayerSearch:
+          $ref: "#/components/schemas/CapabilitiesBodyTaxpayerSearchStruct"
+          description: Name search for taxpayers without an IČO (D56), off by default
         version:
           type: string
       required:
@@ -118,6 +121,7 @@ components:
         - version
         - anonymous
         - taxpayerLookup
+        - taxpayerSearch
         - search
         - fuzzy
         - rate
@@ -173,6 +177,26 @@ components:
         - modes
         - limitMax
       type: object
+    CapabilitiesBodyTaxpayerSearchStruct:
+      additionalProperties: false
+      properties:
+        burst:
+          format: int64
+          type: integer
+        enabled:
+          type: boolean
+        match:
+          description: Every word of the name and no other, in any order; no prefixes, no fuzzy
+          enum:
+            - full_name
+          type: string
+        perSecond:
+          description: Taxpayer searches per API key per second; over it a search answers without taxpayers
+          format: double
+          type: number
+      required:
+        - enabled
+      type: object
     Card:
       additionalProperties: false
       properties:
@@ -182,12 +206,12 @@ components:
           $ref: "#/components/schemas/Address"
           description: The registered seat or place of business, as published in RPO
         dic:
-          description: "kind taxpayer only: the DIČ typed into the box"
+          description: "kind taxpayer only: the taxpayer's DIČ"
           type: string
         ico:
           type: string
         kind:
-          description: "taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list; only the name and municipality, as in the lookup, and never on an instance with anonymous access"
+          description: "taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayer search on (D56); only the name and municipality, as in the lookup, and never on an instance with anonymous access"
           enum:
             - legal_person
             - sole_trader
@@ -433,6 +457,14 @@ components:
           type:
             - array
             - "null"
+        taxpayers:
+          description: "Only when the instance searches taxpayers without an IČO by name (D56): searched; not_searched (fuzzy mode, fewer than two words, or the businesses filled the limit: only a full name is matched, after the businesses); rate_limited (the results are without taxpayers, retry later); stale (the DIČ list is not fresh, so taxpayers were not searched: their absence means nothing)"
+          enum:
+            - searched
+            - not_searched
+            - rate_limited
+            - stale
+          type: string
       required:
         - mode
         - results

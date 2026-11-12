@@ -60,6 +60,11 @@ revokes one objection and tells you how many records other objections still hide
 every change (`suppress --export`): they are the only data a rebuild cannot restore. Do not put personal data into
 `--reason`.
 
+A taxpayer without an IČO objects by DIČ: `suppress --subject 2099900051`. That keeps them out of taxpayer name
+search (when it is on) and has no links; a DIČ that belongs to a subject with an IČO is refused, object by the IČO.
+When the DIČ list later gives an objected DIČ an IČO, the sync links that IČO's records to the objection by itself
+(basis `dic_list`, with a warning in the log, like every link); `suppress --list` notes it.
+
 ## Upgrades
 
 1. Pull or build the new image.

@@ -164,6 +164,10 @@ func (s *FS) one(ctx context.Context, l fs.List) error {
 	s.cfg.Log.Info("fs list applied", "list", l.Slug, "as_of", fmtDay(res.AsOf), "items", res.Items, "inserted", res.Inserted,
 		"updated", res.Updated, "absent", res.Absent, "duplicates", res.Duplicates, "conflicts", res.Conflicts, "skipped", res.Skipped, "no_dic_yet", res.NoDICYet,
 		"duration", time.Since(t0).Round(time.Millisecond))
+	for id, n := range res.Linked {
+		s.cfg.Log.Warn("objection linked to records that carry its identifier", "objection", id, "records", n, "unit", name,
+			"review", fmt.Sprintf("suppress --list --id %d", id))
+	}
 	if w := skippedJump(prevSkipped, res.Skipped); w != "" {
 		s.cfg.Log.Warn("fs list: items without any identifier jumped", "list", l.Slug, "previous", prevSkipped, "now", res.Skipped)
 	}

@@ -295,6 +295,7 @@ func apiConfig(cfg config.Config, keys api.Keys) api.Config {
 		Version: version, Keys: keys, AllowAnonymous: cfg.AllowAnonymous, Fuzzy: cfg.SearchFuzzy,
 		RatePerSecond: cfg.RatePerSecond, RateBurst: cfg.RateBurst, FuzzyEvery: cfg.FuzzyEvery,
 		AnonRatePerSecond: cfg.AnonRatePerSecond, AnonRateBurst: cfg.AnonRateBurst, AnonFuzzyEvery: cfg.AnonFuzzyEvery,
+		SearchTaxpayers: cfg.SearchTaxpayers, TaxpayerRatePerSecond: cfg.TaxpayerRatePerSecond, TaxpayerRateBurst: cfg.TaxpayerRateBurst,
 		MCP: cfg.MCP, MCPAllowedOrigins: cfg.MCPAllowedOrigins,
 		FuzzyConcurrent: cfg.FuzzyConcurrent, FuzzyTimeout: cfg.FuzzyTimeout, QueryTimeout: cfg.QueryTimeout,
 		MaxInFlight: cfg.MaxInFlight, AdmitWait: cfg.AdmitWait,
@@ -334,7 +335,7 @@ func runServe(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("serving", "listen", cfg.Listen, "keys", len(keys), "anonymous", cfg.AllowAnonymous, "fuzzy", cfg.SearchFuzzy, "mcp", cfg.MCP,
+	log.Info("serving", "listen", cfg.Listen, "keys", len(keys), "anonymous", cfg.AllowAnonymous, "fuzzy", cfg.SearchFuzzy, "taxpayer_search", cfg.SearchTaxpayers, "mcp", cfg.MCP,
 		"pool_max_conns", pcfg.MaxConns, "max_in_flight", acfg.MaxInFlight)
 	select {
 	case err := <-errc:
@@ -405,7 +406,7 @@ func runOpenAPI(stdout io.Writer) error {
 func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io.Reader, stdout io.Writer) error {
 	fset := flag.NewFlagSet("suppress", flag.ContinueOnError)
 	fset.SetOutput(io.Discard)
-	subject := fset.String("subject", "", "the subject's IČO (or r<RPO id> for one record)")
+	subject := fset.String("subject", "", "the subject's IČO, r<RPO id> for one record, or the DIČ of a taxpayer without an IČO")
 	reason := fset.String("reason", "", "operator note, e.g. a ticket number; never personal data")
 	undo := fset.Bool("undo", false, "revoke an objection: with --id, or with --subject when it has exactly one")
 	id := fset.Int64("id", 0, "the objection's number (see --list)")
@@ -430,7 +431,7 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 	}
 	switch {
 	case modes != 1 || fset.NArg() > 0:
-		return fmt.Errorf("%w: suppress: --subject needs an IČO (8 digits) or r<RPO id>; or use one of --undo, --release, --unrelease, --list, --export, --restore, --init-empty", errUsage)
+		return fmt.Errorf("%w: suppress: --subject needs an IČO (8 digits), a DIČ (10 digits) or r<RPO id>; or use one of --undo, --release, --unrelease, --list, --export, --restore, --init-empty", errUsage)
 	case *undo && (*id > 0) == (*subject != ""):
 		return fmt.Errorf("%w: suppress --undo needs --id N or --subject", errUsage)
 	case (*release || *unrelease) && (*id <= 0 || *record <= 0 || *subject != ""):
@@ -442,8 +443,10 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 	if key != "" {
 		if ico, ok := normalize.ICO(key); ok {
 			key = ico
+		} else if kind, dic := normalize.Classify(key); kind == normalize.KindDIC {
+			key = dic
 		} else if !ingest.ValidObjectionKey(key) {
-			return fmt.Errorf("%w: --subject needs an IČO (8 digits) or r<RPO id>", errUsage)
+			return fmt.Errorf("%w: --subject needs an IČO (8 digits), a DIČ (10 digits) or r<RPO id>", errUsage)
 		}
 	}
 	var backup []ingest.Objection
@@ -549,9 +552,12 @@ func runSuppress(ctx context.Context, cfg config.Config, args []string, stdin io
 	if err != nil {
 		return err
 	}
-	if c.Records == 0 {
+	switch {
+	case c.Records == 0:
 		fmt.Fprintf(stdout, "objection #%d recorded; no record matches %s yet, it applies when one appears. Check the identifier\n", oid, key)
-	} else {
+	case len(key) == 10:
+		fmt.Fprintf(stdout, "objection #%d recorded; the taxpayer is kept out of taxpayer name search; exact lookup is unaffected\n", oid)
+	default:
 		fmt.Fprintf(stdout, "objection #%d recorded; %d record(s) kept out of name search; exact lookup is unaffected\n", oid, c.Hidden)
 	}
 	return nil
@@ -574,13 +580,19 @@ func printObjections(w io.Writer, rows []ingest.Objection, id int64) error {
 				switch {
 				case l.ReleasedAt != nil:
 					released++
-				case l.Basis == ingest.BasisCarriedICO:
+				case l.Basis == ingest.BasisCarriedICO, l.Basis == ingest.BasisDICList:
 					bySync++
 				default:
 					byOperator++
 				}
 			}
 			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d/%d/%d\t%s\n", o.ID, o.Key, stamp(&o.CreatedAt), stamp(o.RevokedAt), byOperator, bySync, released, o.Reason)
+		}
+		for _, o := range rows {
+			if o.DICHasICO != "" && o.RevokedAt == nil {
+				fmt.Fprintf(w, "note: objection #%d is by DIČ %s, which the DIČ list now gives IČO %s: the records with that IČO are linked to it (suppress --list --id %d)\n",
+					o.ID, o.Key, o.DICHasICO, o.ID)
+			}
 		}
 		return nil
 	}
@@ -741,7 +753,7 @@ func readObjections(r io.Reader) ([]ingest.Objection, error) {
 		}
 		for _, l := range links {
 			switch l.Basis {
-			case ingest.BasisAtObjection, ingest.BasisCarriedICO, ingest.BasisRestored, ingest.BasisMigrated:
+			case ingest.BasisAtObjection, ingest.BasisCarriedICO, ingest.BasisRestored, ingest.BasisMigrated, ingest.BasisDICList:
 			default:
 				return nil, bad
 			}
