@@ -66,8 +66,7 @@ landlords. By default they are found only by their exact DIČ. An operator can t
 - **The full name only.** Every word of the name and no other, in any order: `Jana Fiktívna` and `fiktivna jana`
   find "Jana Fiktívna", but `jana`, `jana fikt` and `jana fiktivna nova` do not. Diacritics and case are ignored.
 - **Default mode only**, never fuzzy, and only with an API key; never on an instance with anonymous access.
-- **What the lookup gives:** DIČ, name, municipality and the address as the DIČ list publishes it (with the switch
-  on, the lookup by DIČ gives the address too). Cards have `kind: taxpayer` and come after the businesses, in the
+- **What the lookup gives:** DIČ, name, municipality and the address as the DIČ list publishes it. Cards have `kind: taxpayer` and come after the businesses, in the
   room they leave, at most five. See [Data and privacy](/project/data-and-privacy#taxpayers-without-an-ičo) before
   you turn it on.
 - **Its own limit** per key (1 a second, burst 10: enough for a person typing a name, slow for harvesting). Over
@@ -102,8 +101,8 @@ When the database is saturated, a 1/8 vCPU tier answers about 30 default searche
 - Terminated subjects are not in name search. An exact identifier finds them, flagged `active: false`.
 - Natural persons without an IČO (taxpayers known only by DIČ) are not found by name unless the operator turns it
   on, and then only by the full name ([above](#taxpayers-without-an-ičo)). Their exact DIČ typed into the box gives
-  one card of `kind: taxpayer`, the same as the lookup (the address only with taxpayers on), and not on an instance
-  with anonymous access.
+  one card of `kind: taxpayer`, the same as the lookup (with the published address), and not on an instance with
+  anonymous access.
 - A subject kept out of search after an objection is still found by its exact identifier.
 - Results are capped at 20; there is no paging in v1.
 - Inflected forms are different words: `lipa` does not find "U Lipy". Type the start of the word (`lip`), or use

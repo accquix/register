@@ -12,9 +12,9 @@ What an operator turns on or off, and what each means. Everything else has a saf
 
 | Switch | Default | When on |
 | --- | --- | --- |
-| `REGISTER_ALLOW_ANONYMOUS` | off | Requests without a key are served, limited per client IP. Natural persons without an IČO are then never shown, not even by their exact DIČ, and taxpayer name search cannot be on. |
+| `REGISTER_ALLOW_ANONYMOUS` | off | Requests without a key are served, limited per client IP. Natural persons without an IČO are then never shown, not even by their exact DIČ (which otherwise gives their published address), and taxpayer name search cannot be on. |
 | `REGISTER_SEARCH_FUZZY` | on | `mode=fuzzy` corrects typos in names. One at a time per instance. |
-| `REGISTER_SEARCH_TAXPAYERS` | off | Taxpayers without an IČO (mostly private persons, such as landlords) are found by their **full name only**, and they come with the **address the DIČ list publishes**, also in the lookup by DIČ (for invoices). That makes you the controller of their personal data: see [Data and privacy](/project/data-and-privacy#taxpayers-without-an-ičo). A person can object (`suppress --subject <DIČ>`). |
+| `REGISTER_SEARCH_TAXPAYERS` | off | Taxpayers without an IČO (mostly private persons, such as landlords) are also found by their **full name only**, with the address the DIČ list publishes. (An exact DIČ gives that address in every mode, for invoices.) Their data is personal data you are the controller of: see [Data and privacy](/project/data-and-privacy#taxpayers-without-an-ičo). A person can object (`suppress --subject <DIČ>`). |
 | `REGISTER_MCP` | off | AI agents can call the API through `/mcp`, with the same keys and rules. |
 | `REGISTER_RATE_PER_SECOND`, `REGISTER_FUZZY_EVERY` | off | Limits per API key, for an instance several applications share. |
 | `REGISTER_FS_MAX_DROP`, `REGISTER_FS_MAX_UNIDENTIFIED`, `REGISTER_FS_SKIP_MIN_ROWS` | off | Loosen a validation check for one run, to accept a list that changed for a known reason. Logged on every pass. |
@@ -86,7 +86,7 @@ command-line mistake.
 | `REGISTER_API_KEYS` (secret) | — | `name:sha256hex,…`: hashes of the keys. |
 | `REGISTER_ALLOW_ANONYMOUS` | `false` | Serve without keys; disables the natural-person DIČ lookup. |
 | `REGISTER_SEARCH_FUZZY` | `true` | Enables `mode=fuzzy`. |
-| `REGISTER_SEARCH_TAXPAYERS` | `false` | Name search also finds taxpayers without an IČO, by their full name only, and taxpayers come with the published address. Needs API keys: refused with `REGISTER_ALLOW_ANONYMOUS`. See [How search works](/concepts/search#taxpayers-without-an-ičo). |
+| `REGISTER_SEARCH_TAXPAYERS` | `false` | Name search also finds taxpayers without an IČO, by their full name only, with the published address. Needs API keys: refused with `REGISTER_ALLOW_ANONYMOUS`. See [How search works](/concepts/search#taxpayers-without-an-ičo). |
 | `REGISTER_SEARCH_TAXPAYERS_RATE_PER_SECOND` / `_BURST` | `1` / `10` | Taxpayer name searches per API key. Over it, a search answers without taxpayers and says so (`taxpayers: rate_limited`). One key for a whole application means one shared limit for all its users. |
 | `REGISTER_MCP` | `false` | Serves the read-only MCP endpoint `/mcp` for AI agents. |
 | `REGISTER_MCP_ALLOWED_ORIGINS` | — | Browser origins allowed to call `/mcp`, comma-separated. Empty refuses all. |

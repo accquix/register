@@ -168,7 +168,7 @@ type Card struct {
 	Municipality string `json:"municipality,omitempty"`
 	// The same record and order as the lookup's identity section, so both show one address.
 	Address *lookup.Address `json:"address,omitempty" doc:"The registered seat or place of business, as published in RPO"`
-	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other,taxpayer" doc:"taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayers on (D56); the name and municipality, plus the address as the DIČ list publishes it when taxpayers are on (D57), as in the lookup; never on an instance with anonymous access"`
+	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other,taxpayer" doc:"taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayer search on (D56); the name, municipality and the address as the DIČ list publishes it (D57), as in the lookup; never on an instance with anonymous access"`
 	Active  bool            `json:"active"`
 	Typos   int             `json:"typos,omitempty" doc:"fuzzy only: corrections needed"`
 }
@@ -251,11 +251,10 @@ type CapabilitiesBody struct {
 	APIVersion     string `json:"apiVersion"`
 	Version        string `json:"version"`
 	Anonymous      bool   `json:"anonymous" doc:"Anonymous access is enabled"`
-	TaxpayerLookup bool   `json:"taxpayerLookup" doc:"Lookup of natural persons without an IČO by DIČ"`
+	TaxpayerLookup bool   `json:"taxpayerLookup" doc:"Lookup of natural persons without an IČO by exact DIČ: DIČ, name, municipality and the address the DIČ list publishes (D57)"`
 	TaxpayerSearch struct {
 		Enabled   bool    `json:"enabled"`
 		Match     string  `json:"match,omitempty" enum:"full_name" doc:"Every word of the name and no other, in any order; no prefixes, no fuzzy"`
-		Address   bool    `json:"address" doc:"Taxpayer cards and lookups by DIČ carry the address as the DIČ list publishes it (D57)"`
 		PerSecond float64 `json:"perSecond,omitempty" doc:"Taxpayer searches per API key per second; over it a search answers without taxpayers"`
 		Burst     int     `json:"burst,omitempty"`
 	} `json:"taxpayerSearch" doc:"Name search for taxpayers without an IČO (D56), off by default"`
@@ -550,12 +549,9 @@ FROM fs_tax_subject WHERE dic = $1 AND absent_since IS NULL`, id).Scan(&ico, &na
 			icos = []string{ico}
 		case !s.cfg.AllowAnonymous && name != "":
 			// a DIČ without an IČO: the same as the lookup gives, and under the same rule (D26, D57):
-			// the address only when the operator turned taxpayers on, never with anonymous access
-			c := Card{DIC: id, Name: name, Municipality: muni, Kind: "taxpayer", Active: true}
-			if s.cfg.SearchTaxpayers {
-				c.Address = lookup.TaxpayerAddress(street, psc, muni, country)
-			}
-			return []Card{c}, nil
+			// with the published address, never with anonymous access
+			return []Card{{DIC: id, Name: name, Municipality: muni, Kind: "taxpayer", Active: true,
+				Address: lookup.TaxpayerAddress(street, psc, muni, country)}}, nil
 		}
 	case normalize.KindICDPH:
 		rows, err := s.pool.Query(ctx, `SELECT DISTINCT ico FROM fs_vat_payer WHERE ic_dph = $1 AND ico IS NOT NULL AND absent_since IS NULL ORDER BY ico`, id)
@@ -604,7 +600,9 @@ func (s *Server) lookupOne(ctx context.Context, rd ready, raw string) (*LookupBo
 		}
 		body.Subjects = append(body.Subjects, sub)
 	case normalize.KindDIC:
-		sub, tp, err := s.store.ByDIC(ctx, srcs, id, s.cfg.SearchTaxpayers)
+		// an exact DIČ with a key gives the published address, for invoices (D57); anonymous
+		// instances never return a taxpayer (below)
+		sub, tp, err := s.store.ByDIC(ctx, srcs, id, true)
 		if err != nil {
 			return nil, dbError(err)
 		}
@@ -724,7 +722,7 @@ func (s *Server) capabilities(ctx context.Context, _ *struct{}) (*CapabilitiesOu
 	}
 	b.APIVersion, b.Version, b.Anonymous, b.TaxpayerLookup = APIVersion, s.cfg.Version, s.cfg.AllowAnonymous, !s.cfg.AllowAnonymous
 	if s.cfg.SearchTaxpayers {
-		b.TaxpayerSearch.Enabled, b.TaxpayerSearch.Match, b.TaxpayerSearch.Address = true, "full_name", true
+		b.TaxpayerSearch.Enabled, b.TaxpayerSearch.Match = true, "full_name"
 		b.TaxpayerSearch.PerSecond, b.TaxpayerSearch.Burst = s.cfg.TaxpayerRatePerSecond, s.cfg.TaxpayerRateBurst
 	}
 	b.Search.Modes, b.Search.LimitMax = []string{"default"}, 20

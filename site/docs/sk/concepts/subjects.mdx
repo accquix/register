@@ -47,7 +47,7 @@ vrátiť viac subjektov.
 | --- | --- | --- | --- |
 | IČO aj DIČ (firma, živnostník) | nájde sa | nájde sa, ako pri vypnutých | subjekt so všetkými časťami |
 | IČO, zatiaľ bez DIČ (nový podnik) | nájde sa z RPO | rovnako | IČO ho nájde, daňová časť `absent`; v `/v1/sources` sa počíta v `itemsWithoutDic` |
-| Len DIČ (súkromná osoba, napríklad prenajímateľ) | nenájde sa | len podľa celého mena: DIČ, meno, obec, zverejnená adresa; najviac päť, za firmami | DIČ vráti `taxpayer`: meno a obec, pri zapnutých daňovníkoch aj adresu |
+| Len DIČ (súkromná osoba, napríklad prenajímateľ) | nenájde sa | len podľa celého mena: DIČ, meno, obec, zverejnená adresa; najviac päť, za firmami | DIČ vráti `taxpayer`: meno, obec a zverejnenú adresu |
 | Len DIČ, so zlým IČO v zozname DIČ | nenájde sa | ako „len DIČ“ | ako „len DIČ“ |
 | Ani IČO, ani DIČ | položka sa vynechá a započíta (`skippedItems`); nad limitom zoznamu sa zoznam zablokuje | rovnako | — |
 | Len DIČ, potom pribudne IČO | nájde sa ako podnik | zmizne z vyhľadávania daňovníkov, nájde sa ako podnik | obe vedú k podniku |

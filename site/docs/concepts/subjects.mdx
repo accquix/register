@@ -47,7 +47,7 @@ Exact lookup by IČO, DIČ or IČ DPH is the same in both.
 | --- | --- | --- | --- |
 | IČO and DIČ (a company, a sole trader) | found | found, as when off | the subject, with every section |
 | IČO, no DIČ yet (a new business) | found from RPO | the same | IČO finds it, tax section `absent`; counted as `itemsWithoutDic` in `/v1/sources` |
-| DIČ only (a private person, such as a landlord) | not found | by the full name only: DIČ, name, municipality, published address; at most five, after the businesses | DIČ gives a `taxpayer`: name and municipality, with taxpayers on also the address |
+| DIČ only (a private person, such as a landlord) | not found | by the full name only: DIČ, name, municipality, published address; at most five, after the businesses | DIČ gives a `taxpayer`: name, municipality and the published address |
 | DIČ only, with a malformed IČO in the DIČ list | not found | as "DIČ only" | as "DIČ only" |
 | Neither IČO nor DIČ | the item is left out and counted (`skippedItems`); above the list's cap the list is blocked | the same | — |
 | DIČ only, then an IČO appears | found as a business | leaves the taxpayer search, found as a business | both lead to the business |

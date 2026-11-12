@@ -278,11 +278,11 @@ func TestAPI(t *testing.T) {
 		if r := m["results"].([]any); path(r[1], "active") != false {
 			t.Fatal("a terminated subject found by identifier must be flagged inactive")
 		}
-		// D26: a natural person without an IČO is never found by name, but the exact DIČ typed into
-		// the box gives the same as the lookup: name and municipality, never an address
+		// D26, D57: a natural person without an IČO is not found by name, but the exact DIČ typed
+		// into the box gives the same as the lookup: name, municipality, the published address
 		if _, _, m := e.get(t, "/v1/search?q=2099900050", true); len(names(m)) != 1 {
 			t.Fatalf("exact DIČ of a taxpayer: %v", m)
-		} else if r := m["results"].([]any)[0]; path(r, "kind") != "taxpayer" || path(r, "dic") != "2099900050" || path(r, "ico") != nil || path(r, "address") != nil {
+		} else if r := m["results"].([]any)[0]; path(r, "kind") != "taxpayer" || path(r, "dic") != "2099900050" || path(r, "ico") != nil || path(r, "address", "street") != "Testovacia 2" {
 			t.Fatalf("taxpayer card: %v", r)
 		}
 	})
@@ -561,12 +561,12 @@ func TestTaxpayerNameSearch(t *testing.T) {
 	t.Run("off by default", func(t *testing.T) {
 		e := start(t, dsn, nil)
 		want(t, e, "Jana Fiktívna", "")
-		// off: the exact DIČ gives the name and municipality only, never an address (D26)
-		if _, _, m := e.get(t, "/v1/lookup/2099900051", true); path(m, "taxpayer", "dic") != "2099900051" || path(m, "taxpayer", "address") != nil {
-			t.Fatalf("lookup with taxpayers off: %v", m)
+		// D57: name search off, but an exact DIČ with a key gives the published address, for invoices
+		if _, _, m := e.get(t, "/v1/lookup/2099900051", true); path(m, "taxpayer", "dic") != "2099900051" || path(m, "taxpayer", "address", "street") != "Testovacia 2" {
+			t.Fatalf("lookup with taxpayer search off: %v", m)
 		}
-		if _, _, m := e.get(t, "/v1/search?q=2099900051", true); path(m["results"].([]any)[0], "address") != nil {
-			t.Fatalf("the DIČ in the box with taxpayers off: %v", m)
+		if _, _, m := e.get(t, "/v1/search?q=2099900051", true); path(m["results"].([]any)[0], "address", "postalCode") != "999 99" {
+			t.Fatalf("the DIČ in the box with taxpayer search off: %v", m)
 		}
 		if _, _, m := e.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "enabled") != false {
 			t.Fatalf("capabilities: %v", m)
@@ -587,9 +587,6 @@ func TestTaxpayerNameSearch(t *testing.T) {
 		}
 		if _, _, m := on.get(t, "/v1/search?q=2099900051", true); strings.Join(taxpayers(m), ",") != "2099900051" {
 			t.Fatalf("the DIČ in the box with taxpayers on: %v", m)
-		}
-		if _, _, m := on.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "address") != true {
-			t.Fatalf("capabilities: %v", m)
 		}
 	})
 

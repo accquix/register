@@ -68,7 +68,7 @@ GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
 | `matchedName` | The official name that matched, when it is not the display name (a sole trader's other name). |
 | `municipality` | Municipality of the seat or place of business. |
 | `address` | The full seat or place of business as published in RPO: `street`, `buildingNumber`, `postalCode`, `municipality`, `country`. The same as in the lookup. |
-| `kind` | `legal_person`, `sole_trader`, `public_body`, `other`, or `taxpayer`: a taxpayer without an IČO, with `dic`, `name`, `municipality` and, with taxpayers on, the published `address` ([details](/concepts/search#taxpayers-without-an-ičo)). |
+| `kind` | `legal_person`, `sole_trader`, `public_body`, `other`, or `taxpayer`: a taxpayer without an IČO, with `dic`, `name`, `municipality` and the published `address` ([details](/concepts/search#taxpayers-without-an-ičo)). |
 | `active` | `false` only for a terminated subject found by identifier. |
 | `typos` | Fuzzy only: corrections needed. |
 

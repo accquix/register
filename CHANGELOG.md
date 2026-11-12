@@ -31,8 +31,8 @@ first monthly reconcile against a new RPO snapshot (about 2026-12-05) is the las
   card of `kind: taxpayer` with the DIČ, name and municipality only, as the lookup does (D54).
 - **Taxpayer name search**, off by default (`REGISTER_SEARCH_TAXPAYERS`): taxpayers without an IČO
   by their full name only, in the default mode, with an API key, within a separate per-key limit;
-  the response field `taxpayers` says whether they were searched (D56). With it on, taxpayers come
-  with the address the DIČ list publishes, also in the lookup by DIČ, for invoicing (D57).
+  the response field `taxpayers` says whether they were searched (D56). A taxpayer without an IČO
+  comes with the address the DIČ list publishes, in the exact lookup by DIČ too, for invoicing (D57).
 - **Lookup** `GET /v1/lookup/{id}` by IČO, DIČ or IČ DPH, with sections `identity`, `tax`, `vat`
   and `risk`, each `present`, `absent` or `unknown`, with its source, as-of date and a content
   version; `POST /v1/lookup:batch` for up to 100 identifiers, with `fields: "versions"` for daily

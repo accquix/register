@@ -66,8 +66,7 @@ Predvolene sa nájdu len podľa presného DIČ. Prevádzkovateľ môže zapnúť
 - **Len celé meno.** Každé slovo mena a žiadne iné, v ľubovoľnom poradí: `Jana Fiktívna` aj `fiktivna jana` nájdu
   „Jana Fiktívna“, ale `jana`, `jana fikt` ani `jana fiktivna nova` nie. Diakritika a veľké písmená sa ignorujú.
 - **Len predvolený režim**, nikdy približný, a len s API kľúčom; nikdy na inštancii s anonymným prístupom.
-- **To isté ako overenie:** DIČ, meno, obec a adresa, ako ju zverejňuje zoznam DIČ (pri zapnutom prepínači vráti
-  adresu aj overenie podľa DIČ). Karty majú `kind: taxpayer` a sú za firmami, v mieste, ktoré firmy nechajú,
+- **To isté ako overenie:** DIČ, meno, obec a adresa, ako ju zverejňuje zoznam DIČ. Karty majú `kind: taxpayer` a sú za firmami, v mieste, ktoré firmy nechajú,
   najviac päť. Pred zapnutím si prečítajte [Dáta a súkromie](/sk/project/data-and-privacy#daňovníci-bez-ičo).
 - **Vlastný limit** na kľúč (1 za sekundu, nárazovo 10: dosť pre človeka, ktorý píše meno, pomaly na hromadné
   zbieranie). Nad ním vyhľadávanie odpovie bez daňovníkov a odpoveď povie `taxpayers: rate_limited`. Pri jednom
@@ -101,8 +100,7 @@ S oneskorením na strane klienta približne 120 ms pošle píšuci človek jedno
 - Zaniknuté subjekty nie sú vo vyhľadávaní podľa názvu. Presný identifikátor ich nájde s `active: false`.
 - Fyzické osoby bez IČO (daňovníci známi len podľa DIČ) sa podľa mena nenájdu, kým to prevádzkovateľ nezapne, a
   potom len podľa celého mena ([vyššie](#daňovníci-bez-ičo)). Ich presné DIČ zadané do poľa vráti jednu kartu
-  `kind: taxpayer`, rovnako ako overenie (adresu len pri zapnutých daňovníkoch), a nie na inštancii s anonymným
-  prístupom.
+  `kind: taxpayer`, rovnako ako overenie (so zverejnenou adresou), a nie na inštancii s anonymným prístupom.
 - Subjekt vyradený z vyhľadávania po námietke sa stále nájde podľa presného identifikátora.
 - Výsledkov je najviac 20; stránkovanie v1 nemá.
 - Skloňované tvary sú iné slová: `lipa` nenájde „U Lipy“. Napíšte začiatok slova (`lip`) alebo použite približné

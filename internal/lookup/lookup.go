@@ -221,14 +221,14 @@ type Subject struct {
 	Risk     Risk     `json:"risk"`
 }
 
-// Taxpayer is a taxpayer without an IČO, mostly a natural person (D26): DIČ, name and
-// municipality; with the address as the DIČ list publishes it when the operator turned taxpayers
-// on (REGISTER_SEARCH_TAXPAYERS, D57).
+// Taxpayer is a taxpayer without an IČO, mostly a natural person (D26): DIČ, name, municipality
+// and the address as the DIČ list publishes it (D57), for an API key on an instance without
+// anonymous access.
 type Taxpayer struct {
 	DIC          string    `json:"dic"`
 	Name         string    `json:"name,omitempty"`
 	Municipality string    `json:"municipality,omitempty"`
-	Address      *Address  `json:"address,omitempty" doc:"Only when the instance turned taxpayers on (D57): the address as the Financial Administration's DIČ list publishes it; the street field holds street and number together"`
+	Address      *Address  `json:"address,omitempty" doc:"The address as the Financial Administration's DIČ list publishes it (D57); the street field holds street and number together"`
 	Source       SourceRef `json:"source"`
 }
 
