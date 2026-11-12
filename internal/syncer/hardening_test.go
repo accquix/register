@@ -348,8 +348,9 @@ func TestBootstrapTrustsOnlyASettledWholeSnapshot(t *testing.T) {
 	})
 }
 
-// OQ-37 (D38): items with no identifier at all are left out and counted, up to fs.MaxUnidentified
-// per file; they change no other threshold, and more of them blocks the list as before.
+// OQ-37 (D38, D53): items with no identifier at all are left out and counted, up to the list's cap;
+// they change no other threshold, and more of them blocks the list as before. A sudden jump within
+// the cap is applied with a warning.
 func TestFSSkipsItemsWithoutAnyIdentifier(t *testing.T) {
 	ctx := context.Background()
 	conn := testkit.Conn(t, testkit.Database(t))
@@ -400,7 +401,7 @@ func TestFSSkipsItemsWithoutAnyIdentifier(t *testing.T) {
 	}
 
 	// over the cap: the list is blocked and the published data stays
-	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, append(taxItems(1, 100), noID(fs.MaxUnidentified+1)...)))
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, append(taxItems(1, 100), noID(11)...)))
 	if err := s.Run(ctx); !errors.Is(err, syncer.ErrBlocked) {
 		t.Fatalf("over the cap: %v", err)
 	}
@@ -409,6 +410,34 @@ func TestFSSkipsItemsWithoutAnyIdentifier(t *testing.T) {
 	}
 	if n := num(t, conn, `SELECT count(*) FROM fs_tax_subject WHERE absent_since IS NULL`); n != 100 {
 		t.Fatalf("a blocked version must not change the data: %d", n)
+	}
+
+	// D53: a jump within the cap (6, then 41) is applied, with a warning in the diagnostic; the
+	// next quiet version clears it. A wider cap stands in for the size of the real list.
+	if _, err := conn.Exec(ctx, `UPDATE sync_source SET state = 'daily', diagnostic = NULL WHERE source = 'fs:ds_dsrdp'`); err != nil {
+		t.Fatal(err)
+	}
+	lists := make([]fs.List, len(fs.Lists))
+	copy(lists, fs.Lists)
+	for i := range lists {
+		lists[i].Unidentified = fs.UnidentifiedCap{Max: 1000, Floor: 100}
+	}
+	wide := syncer.NewFS(conn, syncer.FSConfig{Client: fs.NewClient(srv.URL()), WorkDir: t.TempDir(), SkipMinRows: true, Lists: lists})
+	for i, n := range []int{6, 41} {
+		srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, append(taxItems(1, 100+i), noID(n)...)))
+		if err := wide.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := state(); st.State != "daily" || st.Cursor.Skipped != 41 || st.Cursor.Items != 101 || !strings.HasPrefix(st.Diagnostic, "warning: 41 items without any identifier, 6") {
+		t.Fatalf("a jump within the cap: %+v", st)
+	}
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day, append(taxItems(1, 100), noID(41)...)))
+	if err := wide.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := state(); st.State != "daily" || st.Diagnostic != "" {
+		t.Fatalf("a steady count: %+v", st)
 	}
 }
 

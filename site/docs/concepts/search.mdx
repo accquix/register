@@ -9,6 +9,15 @@ There is one search box. An identifier is looked up exactly; anything else is a 
 subjects. Names are compared without diacritics, without case and without the legal form, so
 `Zlatá Rybka, s.r.o.`, `zlata rybka` and `ZLATÁ RYBKA a.s.` are the same words.
 
+| | Search `GET /v1/search` | Lookup `GET /v1/lookup/{id}` |
+| --- | --- | --- |
+| Input | a name, or an exact IČO, DIČ or IČ DPH | an exact IČO, DIČ or IČ DPH |
+| Answer | up to 20 candidates: name, identifiers, address, kind, active | one subject with every section: identity, tax, VAT, risk, each with its source and date |
+| Terminated subjects | by identifier only, flagged `active: false` | yes |
+| Taxpayers without an IČO | by exact DIČ only: DIČ, name, municipality | by exact DIČ only: DIČ, name, municipality |
+| Subjects with an objection | by identifier only | yes |
+| Use it to | let a person pick a business | confirm facts before you rely on them |
+
 ## Default search
 
 The default search answers as you type. It runs two steps:
@@ -46,7 +55,7 @@ asks for it, for example with a "Search with typos?" button.
 
 Fuzzy search is **optional and potentially CPU-intensive**, and it **never substitutes exact identifier matching**.
 Operators can switch it off (`REGISTER_SEARCH_FUZZY=false`); `/v1/capabilities` tells clients whether it is on. It
-has its own rate limit, a limit on concurrent fuzzy searches and a timeout.
+has a limit on concurrent fuzzy searches, a timeout and, when the operator sets one, a rate limit per key.
 
 ## What it costs
 
@@ -64,7 +73,9 @@ When the database is saturated, a 1/8 vCPU tier answers about 30 default searche
 ## What search does not do
 
 - Terminated subjects are not in name search. An exact identifier finds them, flagged `active: false`.
-- Natural persons without an IČO (taxpayers known only by DIČ) are never in search.
+- Natural persons without an IČO (taxpayers known only by DIČ) are never found by name. Their exact DIČ typed into
+  the box gives one card of `kind: taxpayer` with the DIČ, name and municipality only, the same as the lookup, and
+  not on an instance with anonymous access.
 - A subject kept out of search after an objection is still found by its exact identifier.
 - Results are capped at 20; there is no paging in v1.
 - Inflected forms are different words: `lipa` does not find "U Lipy". Type the start of the word (`lip`), or use

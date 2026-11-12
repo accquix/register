@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -30,17 +31,22 @@ const APIVersion = "1.0.0"
 
 // Config holds the serve settings.
 type Config struct {
-	Version         string // binary version, reported by /v1/capabilities
-	Keys            Keys
-	AllowAnonymous  bool
-	Fuzzy           bool
-	RatePerSecond   float64
-	RateBurst       int
-	FuzzyEvery      time.Duration
-	FuzzyConcurrent int
-	FuzzyTimeout    time.Duration
-	QueryTimeout    time.Duration
-	Search          search.Config
+	Version        string // binary version, reported by /v1/capabilities
+	Keys           Keys
+	AllowAnonymous bool
+	Fuzzy          bool
+	// per API key; zero: no per-key limit (the default)
+	RatePerSecond float64
+	RateBurst     int
+	FuzzyEvery    time.Duration
+	// per client IP of anonymous callers; zero: 20/s, burst 40, and one fuzzy search per 5 s
+	AnonRatePerSecond float64
+	AnonRateBurst     int
+	AnonFuzzyEvery    time.Duration
+	FuzzyConcurrent   int
+	FuzzyTimeout      time.Duration
+	QueryTimeout      time.Duration
+	Search            search.Config
 	// MCP serves the read-only MCP adapter at /mcp (REGISTER_MCP, D36).
 	MCP bool
 	// MCPAllowedOrigins are browser origins allowed to call /mcp; empty refuses every
@@ -61,8 +67,8 @@ type Server struct {
 	store    *lookup.Store
 	searcher *search.Searcher
 	keys     Keys
-	limiter  *limiter
-	fuzzyLim *limiter
+	limiter  limiters
+	fuzzyLim limiters
 	fuzzySem chan struct{}
 	slots    chan struct{}
 	log      *slog.Logger
@@ -76,11 +82,14 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 	if cfg.FuzzyConcurrent < 1 {
 		cfg.FuzzyConcurrent = 1
 	}
-	if cfg.FuzzyEvery <= 0 {
-		cfg.FuzzyEvery = 5 * time.Second
+	if cfg.AnonFuzzyEvery <= 0 {
+		cfg.AnonFuzzyEvery = 5 * time.Second
 	}
-	if cfg.RatePerSecond <= 0 {
-		cfg.RatePerSecond, cfg.RateBurst = 20, 40
+	if cfg.AnonRatePerSecond <= 0 {
+		cfg.AnonRatePerSecond, cfg.AnonRateBurst = 20, 40
+	}
+	if cfg.RatePerSecond > 0 && cfg.RateBurst <= 0 {
+		cfg.RateBurst = int(math.Ceil(2 * cfg.RatePerSecond))
 	}
 	if cfg.MaxInFlight <= 0 {
 		cfg.MaxInFlight = 10
@@ -95,8 +104,14 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 		cfg: cfg, pool: pool, keys: cfg.Keys, log: log,
 		store:    &lookup.Store{Pool: pool, Now: time.Now},
 		searcher: search.New(pool, cfg.Search),
-		limiter:  newLimiter(cfg.RatePerSecond, cfg.RateBurst),
-		fuzzyLim: newLimiter(1/cfg.FuzzyEvery.Seconds(), 2),
+		limiter: limiters{
+			key:  newLimiter(cfg.RatePerSecond, cfg.RateBurst),
+			anon: newLimiter(cfg.AnonRatePerSecond, cfg.AnonRateBurst),
+		},
+		fuzzyLim: limiters{
+			key:  newLimiterEvery(cfg.FuzzyEvery, 2),
+			anon: newLimiterEvery(cfg.AnonFuzzyEvery, 2),
+		},
 		fuzzySem: make(chan struct{}, cfg.FuzzyConcurrent),
 		slots:    make(chan struct{}, cfg.MaxInFlight),
 	}
@@ -130,12 +145,13 @@ func New(pool *pgxpool.Pool, cfg Config, log *slog.Logger) (http.Handler, huma.A
 // Card is one search result.
 type Card struct {
 	ICO          string `json:"ico,omitempty"`
+	DIC          string `json:"dic,omitempty" doc:"kind taxpayer only: the DIČ typed into the box"`
 	Name         string `json:"name" doc:"Display name, with diacritics and legal form"`
 	MatchedName  string `json:"matchedName,omitempty" doc:"The official name that matched, when it is not the display name"`
 	Municipality string `json:"municipality,omitempty"`
 	// The same record and order as the lookup's identity section, so both show one address.
 	Address *lookup.Address `json:"address,omitempty" doc:"The registered seat or place of business, as published in RPO"`
-	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other"`
+	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other,taxpayer" doc:"taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list; only the name and municipality, as in the lookup, and never on an instance with anonymous access"`
 	Active  bool            `json:"active"`
 	Typos   int             `json:"typos,omitempty" doc:"fuzzy only: corrections needed"`
 }
@@ -207,6 +223,12 @@ type SourcesBody struct {
 
 type SourcesOutput struct{ Body SourcesBody }
 
+// RateLimit is a token bucket: requests per second and the burst.
+type RateLimit struct {
+	PerSecond float64 `json:"perSecond,omitempty"`
+	Burst     int     `json:"burst,omitempty"`
+}
+
 type CapabilitiesBody struct {
 	APIVersion     string `json:"apiVersion"`
 	Version        string `json:"version"`
@@ -217,17 +239,16 @@ type CapabilitiesBody struct {
 		LimitMax int      `json:"limitMax"`
 	} `json:"search"`
 	Fuzzy struct {
-		Enabled     bool   `json:"enabled"`
-		PerKeyEvery string `json:"perKeyEvery,omitempty"`
-		Concurrency int    `json:"concurrencyPerInstance,omitempty"`
-		Timeout     string `json:"timeout,omitempty"`
-		Note        string `json:"note"`
+		Enabled        bool   `json:"enabled"`
+		PerKeyEvery    string `json:"perKeyEvery,omitempty" doc:"One fuzzy search per API key per this interval (burst 2); absent: no per-key limit"`
+		AnonymousEvery string `json:"anonymousEvery,omitempty" doc:"One fuzzy search per anonymous client IP per this interval (burst 2); only when anonymous access is on"`
+		Concurrency    int    `json:"concurrencyPerInstance,omitempty"`
+		Timeout        string `json:"timeout,omitempty"`
+		Note           string `json:"note"`
 	} `json:"fuzzy"`
-	Rate struct {
-		PerSecond float64 `json:"perSecond"`
-		Burst     int     `json:"burst"`
-	} `json:"rate" doc:"Per caller, per instance"`
-	MCP struct {
+	Rate          RateLimit  `json:"rate" doc:"Per API key, per instance; empty: no per-key limit (the default, set by the operator)"`
+	AnonymousRate *RateLimit `json:"anonymousRate,omitempty" doc:"Per anonymous client IP, per instance; only when anonymous access is on"`
+	MCP           struct {
 		Enabled bool   `json:"enabled"`
 		Path    string `json:"path,omitempty"`
 	} `json:"mcp" doc:"The read-only MCP adapter for AI agents"`
@@ -323,7 +344,7 @@ func (s *Server) search(ctx context.Context, in *SearchInput) (*SearchOutput, er
 		if !s.cfg.Fuzzy {
 			return nil, problem(http.StatusBadRequest, "fuzzy_disabled", "fuzzy search is disabled on this instance")
 		}
-		if ok, wait := s.fuzzyLim.allow(principal(ctx).Bucket); !ok {
+		if ok, wait := s.fuzzyLim.allow(principal(ctx)); !ok {
 			return nil, withRetryAfter(problem(http.StatusTooManyRequests, "rate_limited", "fuzzy search rate exceeded"), wait)
 		}
 		select {
@@ -451,12 +472,19 @@ func (s *Server) identifierCards(ctx context.Context, kind normalize.Kind, id st
 	case normalize.KindICO:
 		icos = []string{id}
 	case normalize.KindDIC:
-		rows, err := s.pool.Query(ctx, `SELECT ico FROM fs_tax_subject WHERE dic = $1 AND ico IS NOT NULL AND absent_since IS NULL`, id)
-		if err != nil {
+		var ico, name, muni string
+		err := s.pool.QueryRow(ctx, `SELECT coalesce(ico, ''), coalesce(name, ''), coalesce(municipality, '')
+FROM fs_tax_subject WHERE dic = $1 AND absent_since IS NULL`, id).Scan(&ico, &name, &muni)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
 			return nil, err
-		}
-		if icos, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
-			return nil, err
+		case ico != "":
+			icos = []string{ico}
+		case !s.cfg.AllowAnonymous && name != "":
+			// a DIČ without an IČO: the same as the lookup gives, and under the same rule (D26):
+			// the name and municipality only, never on an instance with anonymous access
+			return []Card{{DIC: id, Name: name, Municipality: muni, Kind: "taxpayer", Active: true}}, nil
 		}
 	case normalize.KindICDPH:
 		rows, err := s.pool.Query(ctx, `SELECT DISTINCT ico FROM fs_vat_payer WHERE ic_dph = $1 AND ico IS NOT NULL AND absent_since IS NULL ORDER BY ico`, id)
@@ -629,9 +657,20 @@ func (s *Server) capabilities(ctx context.Context, _ *struct{}) (*CapabilitiesOu
 	b.Fuzzy.Note = "Fuzzy search is optional, potentially CPU-intensive, and never substitutes exact identifier matching."
 	if s.cfg.Fuzzy {
 		b.Search.Modes = append(b.Search.Modes, "fuzzy")
-		b.Fuzzy.PerKeyEvery, b.Fuzzy.Concurrency, b.Fuzzy.Timeout = s.cfg.FuzzyEvery.String(), s.cfg.FuzzyConcurrent, s.cfg.FuzzyTimeout.String()
+		b.Fuzzy.Concurrency, b.Fuzzy.Timeout = s.cfg.FuzzyConcurrent, s.cfg.FuzzyTimeout.String()
+		if s.cfg.FuzzyEvery > 0 {
+			b.Fuzzy.PerKeyEvery = s.cfg.FuzzyEvery.String()
+		}
+		if s.cfg.AllowAnonymous {
+			b.Fuzzy.AnonymousEvery = s.cfg.AnonFuzzyEvery.String()
+		}
 	}
-	b.Rate.PerSecond, b.Rate.Burst = s.cfg.RatePerSecond, s.cfg.RateBurst
+	if s.cfg.RatePerSecond > 0 {
+		b.Rate.PerSecond, b.Rate.Burst = s.cfg.RatePerSecond, s.cfg.RateBurst
+	}
+	if s.cfg.AllowAnonymous {
+		b.AnonymousRate = &RateLimit{s.cfg.AnonRatePerSecond, s.cfg.AnonRateBurst}
+	}
 	b.MaxInFlight = s.cfg.MaxInFlight
 	if s.cfg.MCP {
 		b.MCP.Enabled, b.MCP.Path = true, MCPPath

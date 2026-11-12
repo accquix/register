@@ -9,7 +9,7 @@ description: Monitorovanie, zablokované zdroje, námietky, aktualizácie a opä
 | --- | --- |
 | `GET /livez` | Proces beží. |
 | `GET /readyz` | `503`, kým nie sú prvýkrát zverejnené všetky zdroje alebo keď je databáza nedostupná. |
-| `GET /v1/sources` | Pri každom zdroji: `state`, `publishedAsOf`, `stale`, `diagnostic`, `skippedItems`. |
+| `GET /v1/sources` | Pri každom zdroji: `state`, `publishedAsOf`, `stale`, `diagnostic`, `items` (ponechané položky), `skippedItems` (položky bez identifikátora), `itemsWithoutDic` (nové podniky zatiaľ bez DIČ). `diagnostic` začínajúca `warning:` pri zozname v stave `daily`: počet položiek bez identifikátora vyskočil; verzia bola použitá. |
 
 Upozornenie nastavte, keď:
 

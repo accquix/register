@@ -78,9 +78,10 @@ func populate(t *testing.T, dsn string) {
 		group(1001, "99900002"), group(1002, "99900003"),
 	}))
 	tax1 := testkit.TaxItem(1, "99900001")
-	person := testkit.TaxItem(50, "")                                     // a natural person without an IČO
-	noID := testkit.Item{"NAZOV_DS": "Fiktívna Osoba Bez Identifikátora"} // OQ-37: left out and counted
-	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day(0), []testkit.Item{tax1, noID, person, noID}))
+	person := testkit.TaxItem(50, "")                                              // a natural person without an IČO
+	noID := testkit.Item{"NAZOV_DS": "Fiktívna Osoba Bez Identifikátora"}          // OQ-37: left out and counted
+	newBiz := testkit.Item{"ICO": "99900008", "NAZOV_DS": "Nová Fiktívna Živnosť"} // D52: an IČO, no DIČ yet
+	srv.Put("ds_dsrdp", testkit.FSZip("ds_dsrdp", day(0), []testkit.Item{tax1, noID, person, noID, newBiz}))
 	srv.Put("ds_iz_ran", testkit.FSZip("ds_iz_ran", day(0), []testkit.Item{{"DIC": "2099900001", "ICO": "99900001", "IDS": "spoľahlivý"}}))
 	srv.Put("ds_dphz", testkit.FSZip("ds_dphz", day(0), nil))
 	srv.Put("ds_dphv", testkit.FSZip("ds_dphv", day(0), nil))
@@ -220,6 +221,13 @@ func TestAPI(t *testing.T) {
 			if got != want {
 				t.Fatalf("%v: skippedItems %v, want %v", src["source"], src["skippedItems"], want)
 			}
+			wantNew := 0.0
+			if src["source"] == "fs:ds_dsrdp" {
+				wantNew = 1 // reported apart: a new business is not a fault
+			}
+			if got, _ := src["itemsWithoutDic"].(float64); got != wantNew {
+				t.Fatalf("%v: itemsWithoutDic %v, want %v", src["source"], src["itemsWithoutDic"], wantNew)
+			}
 		}
 	})
 
@@ -258,8 +266,12 @@ func TestAPI(t *testing.T) {
 		if r := m["results"].([]any); path(r[1], "active") != false {
 			t.Fatal("a terminated subject found by identifier must be flagged inactive")
 		}
-		if _, _, m := e.get(t, "/v1/search?q=2099900050", true); len(names(m)) != 0 {
-			t.Fatal("a natural person without an IČO must never appear in search")
+		// D26: a natural person without an IČO is never found by name, but the exact DIČ typed into
+		// the box gives the same as the lookup: name and municipality, never an address
+		if _, _, m := e.get(t, "/v1/search?q=2099900050", true); len(names(m)) != 1 {
+			t.Fatalf("exact DIČ of a taxpayer: %v", m)
+		} else if r := m["results"].([]any)[0]; path(r, "kind") != "taxpayer" || path(r, "dic") != "2099900050" || path(r, "ico") != nil || path(r, "address") != nil {
+			t.Fatalf("taxpayer card: %v", r)
 		}
 	})
 
@@ -319,6 +331,9 @@ func TestAPI(t *testing.T) {
 		if code, _, _ := anon.get(t, "/v1/search?q=rybka", false); code != 200 {
 			t.Fatalf("anonymous search: %d", code)
 		}
+		if code, _, m := anon.get(t, "/v1/search?q=2099900050", false); code != 200 || len(names(m)) != 0 {
+			t.Fatalf("a taxpayer's DIČ in the box on an anonymous instance: %d %v", code, m)
+		}
 		_, _, m = e.get(t, "/v1/lookup/SK2099900100", true)
 		if subs := m["subjects"].([]any); len(subs) != 2 || path(subs[0], "vat", "icDph") != "SK2099900100" {
 			t.Fatalf("VAT group: %v", m)
@@ -355,6 +370,35 @@ func TestAPI(t *testing.T) {
 		_, _, m = e.get(t, "/v1/capabilities", true)
 		if path(m, "fuzzy", "enabled") != true || !strings.Contains(path(m, "fuzzy", "note").(string), "never substitutes exact identifier") {
 			t.Fatalf("capabilities: %v", m)
+		}
+	})
+
+	t.Run("per-key limits are off by default, anonymous callers are always limited", func(t *testing.T) {
+		def := start(t, dsn, func(c *api.Config) {
+			c.RatePerSecond, c.RateBurst, c.FuzzyEvery = 0, 0, 0
+			c.AllowAnonymous, c.AnonRatePerSecond, c.AnonRateBurst = true, 0.001, 3
+		})
+		for i := range 50 {
+			if code, _, m := def.get(t, "/v1/search?q=rybka", true); code != 200 {
+				t.Fatalf("request %d with a key and no per-key limit: %d %v", i, code, m)
+			}
+		}
+		for i := range 4 {
+			if code, _, m := def.get(t, "/v1/search?mode=fuzzy&q="+q("zlta rybka"), true); code != 200 {
+				t.Fatalf("fuzzy %d with a key and no per-key limit: %d %v", i, code, m)
+			}
+		}
+		_, _, m := def.get(t, "/v1/capabilities", true)
+		if r, _ := m["rate"].(map[string]any); len(r) != 0 || path(m, "anonymousRate", "burst") != float64(3) ||
+			path(m, "fuzzy", "perKeyEvery") != nil || path(m, "fuzzy", "anonymousEvery") != "5s" {
+			t.Fatalf("capabilities: %v", m)
+		}
+		var last int
+		for range 4 {
+			last, _, _ = def.get(t, "/v1/search?q=rybka", false)
+		}
+		if last != 429 {
+			t.Fatalf("the fourth anonymous request over a burst of 3: %d", last)
 		}
 	})
 

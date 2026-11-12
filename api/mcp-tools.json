@@ -47,6 +47,12 @@
                 "diagnostic": {
                   "type": "string"
                 },
+                "items": {
+                  "type": "integer"
+                },
+                "itemsWithoutDic": {
+                  "type": "integer"
+                },
                 "maxAgeDays": {
                   "type": "integer"
                 },
@@ -639,6 +645,9 @@
                     "null",
                     "object"
                   ]
+                },
+                "dic": {
+                  "type": "string"
                 },
                 "ico": {
                   "type": "string"

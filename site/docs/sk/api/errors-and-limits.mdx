@@ -1,6 +1,6 @@
 ---
 title: Chyby a limity
-description: Všetky kódy a dôvody chýb API ako problémové dokumenty RFC 9457, limity požiadaviek na kľúč, odpovede pri preťažení, časové limity a opakovanie.
+description: Všetky kódy a dôvody chýb API ako problémové dokumenty RFC 9457, limity požiadaviek, odpovede pri preťažení, časové limity a opakovanie.
 ---
 
 ## Problémové dokumenty
@@ -32,12 +32,17 @@ Chyby sú dokumenty RFC 9457 `application/problem+json` so stálym kódom `code`
 
 ## Limity požiadaviek
 
-Každý klient (kľúč, alebo IP adresa v anonymnom režime) má vlastný limit typu token bucket, na každú inštanciu:
+Inštanciu si každý prevádzkuje sám a obvykle slúži jednej aplikácii s jedným kľúčom, preto **API kľúče predvolene
+nemajú limit požiadaviek**: prevádzkovateľ ho nastaví, keď inštanciu zdieľa viac aplikácií alebo klientov. Anonymní
+klienti sú vždy obmedzení podľa IP adresy. To, čo chráni databázu, platí vždy: súbežnosť približného vyhľadávania,
+odpovede pri preťažení a časové limity. `GET /v1/capabilities` ukáže platné limity.
 
 | Limit | Predvolené | Premenná |
 | --- | --- | --- |
-| Požiadavky | 20 za sekundu, nárazovo 40 | `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` |
-| Približné vyhľadávania | 1 za 5 s, nárazovo 2 | `REGISTER_FUZZY_EVERY` |
+| Požiadavky na API kľúč | žiadny | `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` (predvolene dvojnásobok) |
+| Približné vyhľadávania na API kľúč | žiadny | `REGISTER_FUZZY_EVERY` (jedno za interval, nárazovo 2) |
+| Požiadavky na IP anonymného klienta | 20 za sekundu, nárazovo 40 | `REGISTER_ANONYMOUS_RATE_PER_SECOND`, `REGISTER_ANONYMOUS_RATE_BURST` |
+| Približné vyhľadávania na IP anonymného klienta | 1 za 5 s, nárazovo 2 | `REGISTER_ANONYMOUS_FUZZY_EVERY` |
 | Súbežné približné vyhľadávania | 1 na inštanciu | `REGISTER_FUZZY_CONCURRENCY` |
 
 Nad limitom je odpoveď `429` s `Retry-After` v sekundách. Nič sa nezaraďuje do fronty.

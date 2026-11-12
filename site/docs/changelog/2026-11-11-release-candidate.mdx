@@ -20,7 +20,10 @@ the command line and the configuration change only to fix a defect. See [Version
 - **AI agents**: the read-only MCP endpoint, and copyable prompts for running and integrating the register.
 - **Full addresses** on every search result, by name or by identifier.
 - **Safer operations**: `serve` refuses to start on an outdated schema; list items without any identifier are left
-  out and counted instead of blocking a list.
+  out and counted instead of blocking a list, up to a cap that follows each list's size.
+- **Limits you set**: API keys have no rate limit by default, because an instance usually serves one application;
+  set one when several share it. Anonymous callers stay limited per client IP.
+- **A taxpayer's DIČ in the search box** gives the same name and municipality as the lookup, never an address.
 
 The last check before 1.0.0 is the first monthly reconcile against a new RPO snapshot, around 5 December 2026.
 The full list is in `CHANGELOG.md` in the repository.

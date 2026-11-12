@@ -1,6 +1,6 @@
 ---
 title: Errors and limits
-description: Every error code and reason of the API as RFC 9457 problem documents, the per-key rate limits, overload answers and timeouts, and how to retry.
+description: Every error code and reason of the API as RFC 9457 problem documents, the rate limits, overload answers and timeouts, and how to retry.
 ---
 
 ## Problem documents
@@ -32,12 +32,17 @@ Treat `503` as "unknown": retry later, and never as "not found".
 
 ## Rate limits
 
-Each caller (a key, or a client IP in anonymous mode) has a token bucket, per instance:
+An instance is self-hosted and usually serves one application with one key, so **API keys have no rate limit by
+default**: the operator sets one when several applications or clients share an instance. Anonymous callers are always
+limited per client IP. What protects the database is on in every case: fuzzy concurrency, overload answers and
+timeouts. `GET /v1/capabilities` shows the limits in effect.
 
 | Limit | Default | Variable |
 | --- | --- | --- |
-| Requests | 20 per second, burst 40 | `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` |
-| Fuzzy searches | 1 per 5 s, burst 2 | `REGISTER_FUZZY_EVERY` |
+| Requests per API key | none | `REGISTER_RATE_PER_SECOND`, `REGISTER_RATE_BURST` (default: twice the rate) |
+| Fuzzy searches per API key | none | `REGISTER_FUZZY_EVERY` (one per interval, burst 2) |
+| Requests per anonymous client IP | 20 per second, burst 40 | `REGISTER_ANONYMOUS_RATE_PER_SECOND`, `REGISTER_ANONYMOUS_RATE_BURST` |
+| Fuzzy searches per anonymous client IP | 1 per 5 s, burst 2 | `REGISTER_ANONYMOUS_FUZZY_EVERY` |
 | Fuzzy searches running at once | 1 per instance | `REGISTER_FUZZY_CONCURRENCY` |
 
 Over a limit, the answer is `429` with `Retry-After` in seconds. Nothing is queued.
