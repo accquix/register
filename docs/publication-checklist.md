@@ -1,6 +1,6 @@
 # Publication and contribution security checklist (OQ-24)
 
-The repository is private today. On GitHub Free for organisations, branch protection, rulesets,
+The repository became public on 2026-11-11, and the steps below were applied that day. On GitHub Free for organisations, branch protection, rulesets,
 fork-PR approval and private vulnerability reporting are available for **public** repositories
 only (checked 2026-11-11: the API answers 403 "Upgrade to GitHub Pro or make this repository
 public", or 422 for fork-PR approval). So these steps happen at publication, in this order.
@@ -23,11 +23,11 @@ public", or 422 for fork-PR approval). So these steps happen at publication, in 
 
 ## Before making the repository public
 
-- [ ] OQ-2, OQ-16 and OQ-21 done, or consciously deferred (D30).
-- [ ] Scan the whole git history for secrets and real register data (for example `gitleaks
+- [x] OQ-2, OQ-16 and OQ-21 done, or consciously deferred (D30).
+- [x] Scan the whole git history for secrets and real register data (for example `gitleaks
       detect` over all commits). The history becomes public as it is.
-- [ ] The documentation site deploys (Cloudflare Pages secrets set, register.accquix.com points
-      to it).
+- [x] The documentation site deploys (Cloudflare builds it from the repository; register.accquix.com
+      points to it).
 
 ## Right after making it public
 
@@ -46,7 +46,7 @@ public", or 422 for fork-PR approval). So these steps happen at publication, in 
    ```sh
    gh api -X PUT repos/accquix/register/branches/main/protection --input - <<'JSON'
    {
-     "required_status_checks": { "strict": false, "contexts": ["test", "lint", "vulncheck", "compose-smoke"] },
+     "required_status_checks": { "strict": false, "contexts": ["test (16)", "test (17)", "test (18)", "lint", "vulncheck", "compose-smoke"] },
      "enforce_admins": false,
      "required_pull_request_reviews": { "required_approving_review_count": 0 },
      "restrictions": null,
@@ -57,7 +57,8 @@ public", or 422 for fork-PR approval). So these steps happen at publication, in 
    JSON
    ```
 
-   The required checks are the jobs of `ci.yml`. The `docs` workflow runs only when the site
+   The required checks are the jobs of `ci.yml`, by their full names: a matrix job is one check
+   per entry (`test (16)`, `test (17)`, `test (18)`). The `docs` workflow runs only when the site
    changes, so it is not required.
 
 3. **Protect release tags.** Only repository admins may create, move or delete `v*` tags, because a
@@ -93,6 +94,6 @@ public", or 422 for fork-PR approval). So these steps happen at publication, in 
 
 ## Before the first public release
 
-- [ ] The tag ruleset above is active; create the first `v*` tag as an admin.
+- [x] The tag ruleset above is active; create the first `v*` tag as an admin.
 - [ ] The release workflow ran once on a test tag in a fork, or its first run is watched.
 - [ ] GHCR package visibility set to public after the first image push.
