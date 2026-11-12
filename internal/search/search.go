@@ -249,12 +249,15 @@ func NameKey(core string) (key string, words int) {
 	return strings.Join(ws, " "), len(ws)
 }
 
-// Taxpayer is a taxpayer without an IČO found by its full name (D56): the DIČ, the name and the
-// municipality, exactly what the lookup by DIČ returns.
+// Taxpayer is a taxpayer without an IČO found by its full name (D56): what the lookup by DIČ
+// returns on an instance with taxpayers on, the address included (D57).
 type Taxpayer struct {
 	DIC          string
 	Name         string
 	Municipality string
+	Street       string // street and number, as the DIČ list publishes them (D57)
+	PostalCode   string
+	Country      string
 }
 
 // objectedNames reads the names of the subjects with an active objection by IČO or by record that
@@ -308,7 +311,8 @@ func (s *Searcher) Taxpayers(ctx context.Context, core string, limit int) ([]Tax
 		}
 	}
 	limit = min(limit, TaxpayerMax)
-	rows, err := s.pool.Query(ctx, `SELECT t.dic, coalesce(t.name, ''), coalesce(t.municipality, '') FROM fs_tax_subject t
+	rows, err := s.pool.Query(ctx, `SELECT t.dic, coalesce(t.name, ''), coalesce(t.municipality, ''),
+  coalesce(t.street, ''), coalesce(t.postal_code, ''), coalesce(t.country, '') FROM fs_tax_subject t
 WHERE register_name_key(t.name_core) = $1 AND t.ico IS NULL AND t.absent_since IS NULL
   AND NOT EXISTS (SELECT 1 FROM objection_active x WHERE x.dic = t.dic)
 ORDER BY t.name, t.dic LIMIT $2`, key, limit)
@@ -317,7 +321,7 @@ ORDER BY t.name, t.dic LIMIT $2`, key, limit)
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Taxpayer, error) {
 		var t Taxpayer
-		err := r.Scan(&t.DIC, &t.Name, &t.Municipality)
+		err := r.Scan(&t.DIC, &t.Name, &t.Municipality, &t.Street, &t.PostalCode, &t.Country)
 		return t, err
 	})
 }

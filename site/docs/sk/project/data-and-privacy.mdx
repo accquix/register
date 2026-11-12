@@ -43,8 +43,27 @@ právnym poradcom pre svoje použitie.
 | --- | --- |
 | Obchodné meno, identifikátory, miesto podnikania alebo sídlo, právnu formu, zápis v registri, dátumy, stav | Bydlisko, ak sa líši od miesta podnikania, dátum narodenia, štatutárne orgány, spoločníkov, zástupcov |
 
-Fyzické osoby bez IČO, známe len podľa DIČ, nie sú vo vyhľadávaní podľa názvu, kým to prevádzkovateľ nezapne
-(`REGISTER_SEARCH_TAXPAYERS`), a potom len podľa celého mena. Register v každom prípade vráti len DIČ, meno a obec,
-iba overeným klientom a nikdy osobu, ktorá namietala. Či má konkrétne použitie takého vyhľadávania právny základ,
-rozhoduje prevádzkovateľ. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
+Jediná výnimka: daňovník bez IČO (najmä súkromná osoba) má len adresu, ktorú Finančná správa zverejňuje v zozname
+DIČ. Ukladá sa s riadkom a vráti sa, len keď zapnete daňovníkov.
+
+## Daňovníci bez IČO
+
+| | Daňovníci vypnutí (predvolené) | Daňovníci zapnutí (`REGISTER_SEARCH_TAXPAYERS=true`) |
+| --- | --- | --- |
+| Podľa presného DIČ | áno: DIČ, meno, obec | áno: DIČ, meno, obec, **zverejnená adresa** |
+| Podľa mena | nie | len podľa celého mena, s adresou |
+| Anonymný prístup | nikdy sa nezobrazia | prepínač nemôže byť zapnutý |
+| Osoba, ktorá namietala | stále sa nájde podľa presného DIČ | mimo vyhľadávania podľa mena; podľa presného DIČ sa nájde aj s adresou |
+
+<Callout type="warning">
+**Zapnutie daňovníkov je rozhodnutie o osobných údajoch.** Adresa súkromnej osoby, napríklad prenajímateľa, ktorému
+fakturujete, je osobný údaj, hoci ju Finančná správa zverejňuje. Ak ju poskytujete zo svojej inštancie, ste
+prevádzkovateľom tohto spracúvania. Pred zapnutím: určte účel (napríklad vystavovanie faktúr) a jeho právny základ,
+sprístupnite ho len aplikáciám, ktoré ho potrebujú, informujte dotknuté osoby, ako to vyžaduje zákon, a námietky
+vybavujte príkazom `suppress --subject <DIČ>`. Register necháva prepínač predvolene vypnutý, za API kľúčmi, s
+limitom na kľúč a bez dopytov v logoch; či je vaše použitie zákonné, posudzujete vy a váš právny poradca.
+</Callout>
+
+Fyzické osoby bez IČO, známe len podľa DIČ, nie sú vo vyhľadávaní podľa názvu, kým nezapnete daňovníkov, a potom
+len podľa celého mena, iba overeným klientom a nikdy osoba, ktorá namietala. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
 nič nikam okrem požiadaviek na oficiálne zdroje: žiadna telemetria.

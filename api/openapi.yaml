@@ -180,6 +180,9 @@ components:
     CapabilitiesBodyTaxpayerSearchStruct:
       additionalProperties: false
       properties:
+        address:
+          description: Taxpayer cards and lookups by DIČ carry the address as the DIČ list publishes it (D57)
+          type: boolean
         burst:
           format: int64
           type: integer
@@ -196,6 +199,7 @@ components:
           type: number
       required:
         - enabled
+        - address
       type: object
     Card:
       additionalProperties: false
@@ -211,7 +215,7 @@ components:
         ico:
           type: string
         kind:
-          description: "taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayer search on (D56); only the name and municipality, as in the lookup, and never on an instance with anonymous access"
+          description: "taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayers on (D56); the name and municipality, plus the address as the DIČ list publishes it when taxpayers are on (D57), as in the lookup; never on an instance with anonymous access"
           enum:
             - legal_person
             - sole_trader
@@ -618,6 +622,9 @@ components:
     Taxpayer:
       additionalProperties: false
       properties:
+        address:
+          $ref: "#/components/schemas/Address"
+          description: "Only when the instance turned taxpayers on (D57): the address as the Financial Administration's DIČ list publishes it; the street field holds street and number together"
         dic:
           type: string
         municipality:

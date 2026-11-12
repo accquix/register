@@ -222,7 +222,11 @@ func summarizeLookup(body []byte) string {
 	}
 	var sb strings.Builder
 	if b.Taxpayer != nil {
-		fmt.Fprintf(&sb, "Natural person without an IČO: DIČ %s, %s.\n", b.Taxpayer.DIC, b.Taxpayer.Name)
+		fmt.Fprintf(&sb, "Natural person without an IČO: DIČ %s, %s", b.Taxpayer.DIC, b.Taxpayer.Name)
+		if a := b.Taxpayer.Address; a != nil {
+			fmt.Fprintf(&sb, ", %s", strings.Join(nonEmpty(a.Street, strings.TrimSpace(a.PostalCode+" "+a.Municipality), a.Country), ", "))
+		}
+		sb.WriteString(".\n")
 	}
 	for _, s := range b.Subjects {
 		fmt.Fprintf(&sb, "- %s", s.Identity.Name)

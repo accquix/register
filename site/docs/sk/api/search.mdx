@@ -68,7 +68,7 @@ GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
 | `matchedName` | Oficiálny názov, ktorý sa zhodoval, ak nie je zobrazovaným názvom (iný názov živnostníka). |
 | `municipality` | Obec sídla alebo miesta podnikania. |
 | `address` | Celá adresa sídla alebo miesta podnikania, ako ju zverejňuje RPO: `street`, `buildingNumber`, `postalCode`, `municipality`, `country`. Rovnaká ako pri overení. |
-| `kind` | `legal_person`, `sole_trader`, `public_body`, `other` alebo `taxpayer`: daňovník bez IČO, len s `dic`, `name` a `municipality` ([podrobnosti](/sk/concepts/search#daňovníci-bez-ičo)). |
+| `kind` | `legal_person`, `sole_trader`, `public_body`, `other` alebo `taxpayer`: daňovník bez IČO s `dic`, `name`, `municipality` a pri zapnutých daňovníkoch so zverejnenou `address` ([podrobnosti](/sk/concepts/search#daňovníci-bez-ičo)). |
 | `active` | `false` iba pri zaniknutom subjekte nájdenom podľa identifikátora. |
 | `typos` | Len pri preklepoch: počet opráv. |
 

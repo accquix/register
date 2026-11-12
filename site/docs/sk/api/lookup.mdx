@@ -15,7 +15,7 @@ GET /v1/lookup/{id}
 | Overenie podľa | Vráti |
 | --- | --- |
 | IČO | Jeden subjekt. |
-| DIČ | Subjekt s týmto DIČ. Fyzická osoba bez IČO dostane len `taxpayer` (DIČ, meno, obec), a to iba pre overený kľúč na inštancii bez anonymného prístupu. |
+| DIČ | Subjekt s týmto DIČ. Fyzická osoba bez IČO dostane len `taxpayer` (DIČ, meno, obec; pri zapnutých daňovníkoch aj `address`, ako ju zverejňuje zoznam DIČ), a to iba pre overený kľúč na inštancii bez anonymného prístupu. |
 | IČ DPH | Všetky subjekty registrované pod ním: jeden, alebo viac pri skupine DPH. |
 
 ## Príklad

@@ -15,7 +15,7 @@ GET /v1/lookup/{id}
 | Looked up by | Returns |
 | --- | --- |
 | IČO | One subject. |
-| DIČ | The subject with that DIČ. A natural person without an IČO gets only `taxpayer` (DIČ, name, municipality), and only for an authenticated key on an instance without anonymous access. |
+| DIČ | The subject with that DIČ. A natural person without an IČO gets only `taxpayer` (DIČ, name, municipality; with taxpayers on also `address` as the DIČ list publishes it), and only for an authenticated key on an instance without anonymous access. |
 | IČ DPH | Every subject registered under it: one, or several for a VAT group. |
 
 ## Example

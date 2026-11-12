@@ -490,6 +490,30 @@
           "taxpayer": {
             "additionalProperties": false,
             "properties": {
+              "address": {
+                "additionalProperties": false,
+                "properties": {
+                  "buildingNumber": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  },
+                  "municipality": {
+                    "type": "string"
+                  },
+                  "postalCode": {
+                    "type": "string"
+                  },
+                  "street": {
+                    "type": "string"
+                  }
+                },
+                "type": [
+                  "null",
+                  "object"
+                ]
+              },
               "dic": {
                 "type": "string"
               },

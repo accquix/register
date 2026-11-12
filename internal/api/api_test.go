@@ -536,12 +536,13 @@ func TestTaxpayerNameSearch(t *testing.T) {
 	dsn := testkit.Database(t)
 	populate(t, dsn)
 	conn := testkit.Conn(t, dsn)
+	// D57: with taxpayers on, a card carries the address as the DIČ list publishes it
 	taxpayers := func(m map[string]any) []string {
 		var out []string
 		for _, r := range m["results"].([]any) {
 			if path(r, "kind") == "taxpayer" {
-				if path(r, "address") != nil || path(r, "ico") != nil {
-					t.Fatalf("a taxpayer card carries only the DIČ, name and municipality: %v", r)
+				if path(r, "ico") != nil || path(r, "address", "street") != "Testovacia 2" || path(r, "address", "postalCode") != "999 99" {
+					t.Fatalf("a taxpayer card: DIČ, name, municipality and the published address: %v", r)
 				}
 				out = append(out, path(r, "dic").(string))
 			}
@@ -560,6 +561,13 @@ func TestTaxpayerNameSearch(t *testing.T) {
 	t.Run("off by default", func(t *testing.T) {
 		e := start(t, dsn, nil)
 		want(t, e, "Jana Fiktívna", "")
+		// off: the exact DIČ gives the name and municipality only, never an address (D26)
+		if _, _, m := e.get(t, "/v1/lookup/2099900051", true); path(m, "taxpayer", "dic") != "2099900051" || path(m, "taxpayer", "address") != nil {
+			t.Fatalf("lookup with taxpayers off: %v", m)
+		}
+		if _, _, m := e.get(t, "/v1/search?q=2099900051", true); path(m["results"].([]any)[0], "address") != nil {
+			t.Fatalf("the DIČ in the box with taxpayers off: %v", m)
+		}
 		if _, _, m := e.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "enabled") != false {
 			t.Fatalf("capabilities: %v", m)
 		}
@@ -572,6 +580,19 @@ func TestTaxpayerNameSearch(t *testing.T) {
 	on := start(t, dsn, func(c *api.Config) {
 		c.SearchTaxpayers, c.TaxpayerRatePerSecond, c.TaxpayerRateBurst = true, 1000, 1000
 	})
+	t.Run("on: the address as the DIČ list publishes it, in the lookup and in the box", func(t *testing.T) {
+		if _, _, m := on.get(t, "/v1/lookup/2099900051", true); path(m, "taxpayer", "address", "street") != "Testovacia 2" ||
+			path(m, "taxpayer", "address", "municipality") != "Fiktívne Mesto" || path(m, "taxpayer", "address", "country") != "Slovensko" {
+			t.Fatalf("lookup with taxpayers on: %v", m)
+		}
+		if _, _, m := on.get(t, "/v1/search?q=2099900051", true); strings.Join(taxpayers(m), ",") != "2099900051" {
+			t.Fatalf("the DIČ in the box with taxpayers on: %v", m)
+		}
+		if _, _, m := on.get(t, "/v1/capabilities", true); path(m, "taxpayerSearch", "address") != true {
+			t.Fatalf("capabilities: %v", m)
+		}
+	})
+
 	t.Run("the full name only, in any word order", func(t *testing.T) {
 		want(t, on, "Jana Fiktívna", "searched", "2099900051", "2099900052")
 		want(t, on, "fiktivna JANA", "searched", "2099900051", "2099900052")

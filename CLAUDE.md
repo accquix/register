@@ -39,6 +39,11 @@ Read before any work:
     entry, the status.
   - Never stored: residence when it differs from the place of business, birth data, statutory
     bodies, stakeholders, representatives.
+  - The one exception, by maintainer decision D57: a taxpayer without an IČO (a DIČ-only row of
+    the Financial Administration's DIČ list, mostly a private person) has the address that list
+    publishes. It is stored with the row and returned only when the operator turns taxpayers on
+    (`REGISTER_SEARCH_TAXPAYERS`), never with anonymous access; the documentation warns the
+    operator of the GDPR duties that come with it.
   - Logs never contain the search query or identifier values.
 - **Identifiers are exact.** Never match an IČO, DIČ or IČ DPH fuzzily. The IČO check digit is a
   warning only. An IČ DPH can belong to several subjects (VAT groups).
