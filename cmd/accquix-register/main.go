@@ -278,7 +278,7 @@ func syncPass(ctx context.Context, conn *pgx.Conn, cfg config.Config, src string
 	}
 	if src == "fs" || src == "all" {
 		errs = append(errs, syncer.NewFS(conn, syncer.FSConfig{
-			Client: fs.NewClient(cfg.FSBaseURL), WorkDir: cfg.WorkDir, MaxDrop: cfg.FSMaxDrop, SkipMinRows: cfg.FSSkipMinRows, Log: log,
+			Client: fs.NewClient(cfg.FSBaseURL), WorkDir: cfg.WorkDir, MaxDrop: cfg.FSMaxDrop, SkipMinRows: cfg.FSSkipMinRows, MaxUnidentified: cfg.FSMaxUnidentified, Log: log,
 		}).Run(ctx))
 	}
 	for i, e := range errs {
@@ -294,6 +294,7 @@ func apiConfig(cfg config.Config, keys api.Keys) api.Config {
 	return api.Config{
 		Version: version, Keys: keys, AllowAnonymous: cfg.AllowAnonymous, Fuzzy: cfg.SearchFuzzy,
 		RatePerSecond: cfg.RatePerSecond, RateBurst: cfg.RateBurst, FuzzyEvery: cfg.FuzzyEvery,
+		AnonRatePerSecond: cfg.AnonRatePerSecond, AnonRateBurst: cfg.AnonRateBurst, AnonFuzzyEvery: cfg.AnonFuzzyEvery,
 		MCP: cfg.MCP, MCPAllowedOrigins: cfg.MCPAllowedOrigins,
 		FuzzyConcurrent: cfg.FuzzyConcurrent, FuzzyTimeout: cfg.FuzzyTimeout, QueryTimeout: cfg.QueryTimeout,
 		MaxInFlight: cfg.MaxInFlight, AdmitWait: cfg.AdmitWait,

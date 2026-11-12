@@ -47,7 +47,7 @@ The adapter is a second door into the same service, not a second service:
 ## Authentication
 
 - **The same API keys as REST:** `Authorization: Bearer <key>`, the same per-key rate limits and
-  fuzzy limits, the same `401`/`429` behaviour. A tool call costs the same as the REST call it maps
+  fuzzy limits when the operator sets them (D55), the same `401`/`429` behaviour. A tool call costs the same as the REST call it maps
   to.
 - **Anonymous mode** (`REGISTER_ALLOW_ANONYMOUS=true`) applies unchanged, including D26: the
   natural-person DIČ lookup is unavailable.

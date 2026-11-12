@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,6 +42,34 @@ type List struct {
 	Target  Target
 	MaxDrop float64 // a new version may have at most this share fewer rows than the active ones (D23)
 	MinRows int     // a version with fewer distinct rows is rejected, also on the first load; 0 = no floor
+	// Unidentified caps the items without any identifier in one file (D38, D53); zero: DefaultUnidentified
+	Unidentified UnidentifiedCap
+}
+
+// UnidentifiedCap is how many items of one file may carry no identifier at all (no DIČ, IČO or
+// IČ DPH) before the file is rejected (D38, D53): Share of the file's items, at least Floor and at
+// most Max. Such an item cannot be found by any identifier; a few of them are the source's
+// noise, many mean the export itself is broken.
+type UnidentifiedCap struct {
+	Share float64
+	Max   int
+	Floor int
+}
+
+// DefaultUnidentified is the cap of every list without its own: 0.01 %, between 10 and 100.
+var DefaultUnidentified = UnidentifiedCap{Share: 0.0001, Max: 100, Floor: 10}
+
+// Allowed is the cap for a file of the given number of items (with the skipped ones).
+func (c UnidentifiedCap) Allowed(items int) int {
+	if c == (UnidentifiedCap{}) {
+		c = DefaultUnidentified
+	}
+	n := int(math.Ceil(c.Share * float64(items)))
+	n = max(n, c.Floor)
+	if c.Max > 0 {
+		n = min(n, c.Max)
+	}
+	return n
 }
 
 // Lists are the six exports the register mirrors. The IBAN lists (ds_dph_iban, ds_dph_oud) are
@@ -48,13 +77,16 @@ type List struct {
 //
 // MinRows is about a quarter to a third of the size measured on 2026-11-10 (docs/sources.md): far
 // below any real version, far above a truncated or empty one.
+//
+// The DIČ list has its own cap of items without any identifier: it is the only list that has them
+// (6 on 2026-11-10, 41 on 2026-11-12, of 1.42 million), and 0.05 % of it is about 700.
 var Lists = []List{
-	{"ds_dphs", VATPayers, 0.03, 100_000},
-	{"ds_dsrdp", TaxSubjects, 0.03, 500_000},
-	{"ds_iz_ran", ListEntries, 0.03, 200_000},
-	{"ds_dphz", ListEntries, 0.20, 1_000},
-	{"ds_dphv", ListEntries, 0.20, 10_000},
-	{"ds_dpho", ListEntries, 0.20, 300},
+	{"ds_dphs", VATPayers, 0.03, 100_000, UnidentifiedCap{}},
+	{"ds_dsrdp", TaxSubjects, 0.03, 500_000, UnidentifiedCap{Share: 0.0005, Max: 1000, Floor: 10}},
+	{"ds_iz_ran", ListEntries, 0.03, 200_000, UnidentifiedCap{}},
+	{"ds_dphz", ListEntries, 0.20, 1_000, UnidentifiedCap{}},
+	{"ds_dphv", ListEntries, 0.20, 10_000, UnidentifiedCap{}},
+	{"ds_dpho", ListEntries, 0.20, 300, UnidentifiedCap{}},
 }
 
 // ListBySlug finds a list definition.
@@ -122,16 +154,14 @@ func isDigits(s string, n int) bool {
 	return true
 }
 
-// MaxUnidentified is how many items of one file may be left out before the file is rejected
-// (OQ-37, D38). An item is left out, and counted, when it carries no identifier at all (it cannot
-// be found by any), or when an item of the DIČ list has a valid IČO but no DIČ yet (a new
-// business: the register knows it from RPO, and there is no DIČ to hold). More of them means
-// the export itself is broken.
-const MaxUnidentified = 100
-
-// errNoIdentifier marks an item to leave out (see MaxUnidentified): fields absent, not
-// malformed. A malformed identifier still rejects the file.
+// errNoIdentifier marks an item with no identifier at all, left out and counted against the
+// list's UnidentifiedCap: fields absent, not malformed. A malformed identifier still rejects the file.
 var errNoIdentifier = errors.New("no identifier")
+
+// errNoDICYet marks an item of the DIČ list with a valid IČO and no DIČ yet: a new business that
+// RPO already knows, before the Financial Administration assigns its DIČ. That is normal, so it is
+// left out and counted with no limit (D52); there is no DIČ to hold.
+var errNoDICYet = errors.New("an IČO without a DIČ yet")
 
 // mapRow turns one XML item into a Row. An item without its key is an error (D23: 0 parse
 // errors), except an item with no identifier at all (errNoIdentifier, counted by the decoder).
@@ -161,8 +191,8 @@ func mapRow(slug string, m map[string]string) (Row, error) {
 	var err error
 	switch slug {
 	case "ds_dsrdp":
-		if r.DIC == "" && r.ICO != "" { // a valid IČO, no DIČ yet
-			return r, errNoIdentifier
+		if r.DIC == "" && r.ICO != "" { // a valid IČO, no DIČ yet: a new business
+			return r, errNoDICYet
 		}
 		r.Key = r.DIC
 	case "ds_dphs":
@@ -235,9 +265,12 @@ type Decoder struct {
 	n    int // items returned
 	pos  int // items read, for error messages
 	err  error
-	// skipped counts items without any identifier (at most MaxUnidentified)
+	// skipped counts items without any identifier (at most unid.Allowed of the file)
 	skipped int
-	closer  io.Closer
+	unid    UnidentifiedCap
+	// noDICYet counts items of the DIČ list with an IČO and no DIČ yet (no limit)
+	noDICYet int
+	closer   io.Closer
 }
 
 // Open reads the XML entry of the ZIP at path.
@@ -329,7 +362,11 @@ func NewDecoder(slug string, r io.Reader, lim Limits) *Decoder {
 	if lim.Items <= 0 {
 		lim.Items = DefaultLimits.Items
 	}
-	return &Decoder{slug: slug, dec: xml.NewDecoder(&limitReader{r: r, limit: lim.XML}), lim: lim, closer: multiCloser{}}
+	unid := DefaultUnidentified
+	if l, ok := ListBySlug(slug); ok && l.Unidentified != (UnidentifiedCap{}) {
+		unid = l.Unidentified
+	}
+	return &Decoder{slug: slug, dec: xml.NewDecoder(&limitReader{r: r, limit: lim.XML}), lim: lim, unid: unid, closer: multiCloser{}}
 }
 
 type multiCloser []io.Closer
@@ -381,6 +418,8 @@ func (d *Decoder) Next() bool {
 		if errors.Is(err, io.EOF) {
 			if d.asOf.IsZero() {
 				d.err = errors.New("no DatumAktualizacieZoznamu in the list")
+			} else if all := d.pos; d.skipped > d.unid.Allowed(all) {
+				d.err = fmt.Errorf("%d of %d items without any identifier (DIC, ICO, IC_DPH), more than the %d allowed", d.skipped, all, d.unid.Allowed(all))
 			}
 			return false
 		}
@@ -438,10 +477,15 @@ func (d *Decoder) Next() bool {
 			r, err := mapRow(d.slug, m)
 			d.pos++
 			if errors.Is(err, errNoIdentifier) {
-				if d.skipped++; d.skipped > MaxUnidentified {
-					d.err = fmt.Errorf("more than %d items without any identifier (DIC, ICO, IC_DPH), or with an IČO but no DIČ in the DIČ list; the latest is item %d", MaxUnidentified, d.pos)
+				// the share is known only at the end; Max stops a broken file early
+				if d.skipped++; d.unid.Max > 0 && d.skipped > d.unid.Max {
+					d.err = fmt.Errorf("more than %d items without any identifier (DIC, ICO, IC_DPH), the most allowed; the latest is item %d", d.unid.Max, d.pos)
 					return false
 				}
+				continue
+			}
+			if errors.Is(err, errNoDICYet) {
+				d.noDICYet++
 				continue
 			}
 			if err != nil {
@@ -455,6 +499,14 @@ func (d *Decoder) Next() bool {
 	}
 }
 
+// SetUnidentified replaces the list's cap of items without any identifier (an operator's
+// override for one run, or a list definition other than the default one). Call it before Next.
+func (d *Decoder) SetUnidentified(c UnidentifiedCap) {
+	if c != (UnidentifiedCap{}) {
+		d.unid = c
+	}
+}
+
 // Row returns the current item.
 func (d *Decoder) Row() Row { return d.row }
 
@@ -463,6 +515,10 @@ func (d *Decoder) Count() int { return d.n }
 
 // Skipped is the number of items left out because they carry no identifier at all.
 func (d *Decoder) Skipped() int { return d.skipped }
+
+// NoDICYet is the number of items of the DIČ list left out because they have an IČO and no DIČ
+// yet (new businesses).
+func (d *Decoder) NoDICYet() int { return d.noDICYet }
 
 // Err returns the first error.
 func (d *Decoder) Err() error { return d.err }

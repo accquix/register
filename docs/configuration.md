@@ -53,6 +53,7 @@ source), `2` a command-line mistake.
 | `REGISTER_ABSENCE_MAX_RATIO` | `0.005` | RPO: absence marking is blocked when more than this share of active records would be marked |
 | `REGISTER_FS_BASE_URL` | `https://report.financnasprava.sk` | Base URL of the Financial Administration list exports |
 | `REGISTER_FS_MAX_DROP` | per list | Overrides every FS list's threshold for a drop in rows and for rows marked absent. Defaults: 0.03 for `ds_dsrdp`, `ds_dphs`, `ds_iz_ran`; 0.20 for `ds_dphz`, `ds_dphv`, `ds_dpho` |
+| `REGISTER_FS_MAX_UNIDENTIFIED` | per list | Replaces every FS list's cap of items without any identifier with this count (D53). Defaults: 0.05 % of `ds_dsrdp`'s items, at least 10 and at most 1000; 0.01 % of every other list's, at least 10 and at most 100. To accept a version whose count grew for a known reason: unblock, run once with the count |
 | `REGISTER_FS_SKIP_MIN_ROWS` | `false` | Every list has a row floor (`ds_dphs` 100 000, `ds_dsrdp` 500 000, `ds_iz_ran` 200 000, `ds_dphv` 10 000, `ds_dphz` 1 000, `ds_dpho` 300): a smaller version is rejected, also on the first load. `true` drops the floors, to accept a list that legitimately fell below one |
 
 Every validation setting that differs from its default is an operator override: the sync logs
@@ -70,8 +71,10 @@ the list as a warning on every pass, so a loosened check is never in effect unno
 | `REGISTER_MCP` | `false` | Serves the read-only MCP adapter at `/mcp` (D36, [mcp.md](mcp.md)): same keys, limits and logging as REST |
 | `REGISTER_MCP_ALLOWED_ORIGINS` | — | Comma-separated browser origins allowed to call `/mcp`; by default every cross-origin browser request is refused |
 | `REGISTER_MCP_KEY` (secret) | — | For `mcp --url`: the API key sent to the instance |
-| `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | `20` / `40` | Token bucket per caller, per instance |
-| `REGISTER_FUZZY_EVERY` | `5s` | One fuzzy search per caller per interval (burst 2) |
+| `REGISTER_RATE_PER_SECOND` / `REGISTER_RATE_BURST` | none / twice the rate | Token bucket per API key, per instance. Off by default (D55): set it when several applications or clients share one instance |
+| `REGISTER_FUZZY_EVERY` | none | One fuzzy search per API key per interval (burst 2). Off by default (D55) |
+| `REGISTER_ANONYMOUS_RATE_PER_SECOND` / `REGISTER_ANONYMOUS_RATE_BURST` | `20` / `40` | Token bucket per client IP of anonymous callers (only with `REGISTER_ALLOW_ANONYMOUS`) |
+| `REGISTER_ANONYMOUS_FUZZY_EVERY` | `5s` | One fuzzy search per anonymous client IP per interval (burst 2) |
 | `REGISTER_FUZZY_CONCURRENCY` | `1` | Fuzzy searches running at once, **per instance**: with several replicas, set a conservative value per replica (D18) |
 | `REGISTER_FUZZY_TIMEOUT` | `2s` | A slower fuzzy search answers `503 timeout` |
 | `REGISTER_QUERY_TIMEOUT` | `3s` | The same for default search and lookup |

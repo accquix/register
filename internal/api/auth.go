@@ -105,7 +105,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		if hold, ok := r.Context().Value(holderKey{}).(*Principal); ok {
 			*hold = p
 		}
-		if ok, wait := s.limiter.allow(p.Bucket); !ok {
+		if ok, wait := s.limiter.allow(p); !ok {
 			writeProblem(w, problem(http.StatusTooManyRequests, "rate_limited", "too many requests"), wait)
 			return
 		}
@@ -127,8 +127,35 @@ type bucket struct {
 	last   time.Time
 }
 
+// newLimiter returns nil, no limit, for a rate of zero.
 func newLimiter(rate float64, burst int) *limiter {
+	if rate <= 0 {
+		return nil
+	}
 	return &limiter{rate: rate, burst: float64(burst), b: map[string]*bucket{}, now: time.Now}
+}
+
+// newLimiterEvery allows one call per interval with a burst; nil, no limit, for zero.
+func newLimiterEvery(every time.Duration, burst int) *limiter {
+	if every <= 0 {
+		return nil
+	}
+	return newLimiter(1/every.Seconds(), burst)
+}
+
+// limiters keep API keys and anonymous callers apart: keys are limited only when the operator
+// sets a limit, anonymous callers always per client IP.
+type limiters struct{ key, anon *limiter }
+
+func (l limiters) allow(p Principal) (bool, time.Duration) {
+	lim := l.anon
+	if p.Authenticated {
+		lim = l.key
+	}
+	if lim == nil {
+		return true, 0
+	}
+	return lim.allow(p.Bucket)
 }
 
 // allow takes one token; when none is left it returns the wait until the next one.

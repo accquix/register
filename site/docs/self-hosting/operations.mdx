@@ -9,7 +9,7 @@ description: "Running an instance: health and freshness checks, what to do when 
 | --- | --- |
 | `GET /livez` | The process is up. |
 | `GET /readyz` | `503` until every source is first published, or when the database is unreachable. |
-| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`, `skippedItems`. |
+| `GET /v1/sources` | Per source: `state`, `publishedAsOf`, `stale`, `diagnostic`, `items` (items kept), `skippedItems` (items with no identifier), `itemsWithoutDic` (new businesses with no DIČ yet). A `diagnostic` starting with `warning:` on a `daily` list: the items with no identifier jumped; the version was applied. |
 
 Alert when:
 

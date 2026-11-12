@@ -189,6 +189,8 @@ func summarizeSearch(body []byte) string {
 		fmt.Fprintf(&sb, "- %s", c.Name)
 		if c.ICO != "" {
 			fmt.Fprintf(&sb, " (IČO %s)", c.ICO)
+		} else if c.DIC != "" {
+			fmt.Fprintf(&sb, " (taxpayer, DIČ %s, no IČO)", c.DIC)
 		}
 		if a := c.Address; a != nil {
 			fmt.Fprintf(&sb, ", %s", strings.Join(nonEmpty(strings.TrimSpace(a.Street+" "+a.BuildingNumber), a.PostalCode+" "+a.Municipality), ", "))
@@ -251,7 +253,10 @@ func summarizeSources(body []byte) string {
 			sb.WriteString(", STALE")
 		}
 		if s.SkippedItems > 0 {
-			fmt.Fprintf(&sb, ", %d item(s) without a usable identifier left out", s.SkippedItems)
+			fmt.Fprintf(&sb, ", %d item(s) without any identifier left out", s.SkippedItems)
+		}
+		if s.ItemsWithoutDIC > 0 {
+			fmt.Fprintf(&sb, ", %d new business(es) with an IČO and no DIČ yet", s.ItemsWithoutDIC)
 		}
 		if s.Diagnostic != "" {
 			fmt.Fprintf(&sb, " (%s)", s.Diagnostic)

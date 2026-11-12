@@ -21,6 +21,21 @@ never takes CPU from API requests.
 Never ingested: the Financial Administration IBAN lists (their licence forbids commercial use), and VIES (its terms
 forbid mirroring). The Register of Financial Statements (RÚZ) is not part of v1.
 
+### The sources in numbers
+
+Measured on the real files (RPO snapshot of 2026-11-07, Financial Administration lists of 2026-11-10 and 2026-11-12).
+The cap is how many items without any identifier one file may have before the list is blocked.
+
+| Source | Size | How it links | Cap |
+| --- | --- | --- | --- |
+| RPO | about 2.28 million records, about 1.1 million active; about 80 % sole traders | by IČO; 6 626 records have none and are kept under their RPO id | — |
+| `ds_dsrdp` | 1 423 331 items: 1 264 931 with DIČ and IČO, 158 359 with a DIČ only (mostly private persons, for example landlords), 41 with no identifier | by IČO to RPO; a DIČ without an IČO only by its exact DIČ | 0.05 %, 10–1000 (about 700) |
+| `ds_dphs` | 319 173 VAT registrations: §4 226 924, §7a 76 182, §5 9 437, §7 5 158, §4b 1 472 | by IČO; a VAT group member by IČ DPH | 0.01 %, 10–100 |
+| `ds_iz_ran` | 648 238 | by DIČ | 0.01 %, 10–100 |
+| `ds_dphz`, `ds_dphv`, `ds_dpho` | 3 805, 44 284, 1 004 | by IČ DPH | 0.01 %, at least 10 |
+
+`GET /v1/sources` gives the same per list for your instance: `items`, `skippedItems`, `itemsWithoutDic`.
+
 ## The sync
 
 A sync pass looks at every source and does what is due. It is safe to run often: with nothing new it costs a few
@@ -50,10 +65,19 @@ the next pass redoes only the unfinished file, and re-applying a file writes not
 a parse error, an older list date) is not applied. The previous data stays served, and the source becomes
 `blocked` with a diagnostic until an operator looks at it. See [Operations](/self-hosting/operations).
 
-One case is not an error. A list item with no identifier at all (no DIČ, IČO or IČ DPH), or an item of the taxpayer
-list with an IČO but no DIČ yet, cannot belong to any subject the register can name. It is left out and counted
-(`skippedItems` in `GET /v1/sources`); more than 100 in one file blocks the list. Such items are never matched to a
-business by name or address.
+Two cases are not errors:
+
+- **A new business with an IČO and no DIČ yet** in the taxpayer list. It is registered in RPO days before the
+  Financial Administration assigns its DIČ, so the register already finds it, with its tax section `absent`. The item
+  is left out of the taxpayer list and counted (`itemsWithoutDic` in `GET /v1/sources`), with no limit: it is normal.
+- **A list item with no identifier at all** (no DIČ, IČO or IČ DPH). It cannot belong to any subject the register
+  can name, so it is left out and counted (`skippedItems`, next to `items`, the items kept). Each list has a cap that
+  follows its size: 0.05 % of the taxpayer list (about 700 today, at most 1000) and 0.01 % of the others (at most
+  100), never less than 10. Above the cap the list is blocked with the previous data kept, because that points to a
+  broken export. A sudden jump within the cap (more than three times the version before, and more than 20 more) is
+  applied with a warning in the list's `diagnostic`.
+
+Neither is ever matched to a business by name or address.
 
 ## The search layer
 

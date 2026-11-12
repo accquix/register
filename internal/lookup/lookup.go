@@ -39,13 +39,15 @@ var Attribution = []string{
 
 // SourceInfo is one row of sync_source plus its freshness.
 type SourceInfo struct {
-	Source        string `json:"source"`
-	State         string `json:"state" enum:"empty,bootstrap,daily,gap_wait,reconcile,blocked"`
-	PublishedAsOf string `json:"publishedAsOf,omitempty" doc:"Date the published data was stamped by the agency"`
-	Stale         bool   `json:"stale"`
-	MaxAgeDays    int    `json:"maxAgeDays"`
-	Diagnostic    string `json:"diagnostic,omitempty"`
-	SkippedItems  int    `json:"skippedItems,omitempty" doc:"Items of the published file left out: no identifier at all, or (in the DIČ list) an IČO without a DIČ yet. More than 100 blocks the list"`
+	Source          string `json:"source"`
+	State           string `json:"state" enum:"empty,bootstrap,daily,gap_wait,reconcile,blocked"`
+	PublishedAsOf   string `json:"publishedAsOf,omitempty" doc:"Date the published data was stamped by the agency"`
+	Stale           bool   `json:"stale"`
+	MaxAgeDays      int    `json:"maxAgeDays"`
+	Diagnostic      string `json:"diagnostic,omitempty"`
+	Items           int    `json:"items,omitempty" doc:"Financial Administration lists: items of the published file kept, with an identifier"`
+	SkippedItems    int    `json:"skippedItems,omitempty" doc:"Items of the published file left out because they carry no identifier at all. Above the list's cap (0.05 % of the DIČ list, at most 1000; 0.01 % of the others, at most 100; never less than 10) the list is blocked"`
+	ItemsWithoutDIC int    `json:"itemsWithoutDic,omitempty" doc:"DIČ list: items left out because they have an IČO and no DIČ yet (new businesses). Normal, with no limit"`
 }
 
 func (s SourceInfo) published() bool { return s.PublishedAsOf != "" }
@@ -60,7 +62,7 @@ type Store struct {
 // Sources returns every expected source, published or not.
 func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT source, state, published_as_of, coalesce(diagnostic, ''),
-  coalesce((cursor->>'skipped')::int, 0) FROM sync_source`)
+  coalesce((cursor->>'skipped')::int, 0), coalesce((cursor->>'noDicYet')::int, 0), coalesce((cursor->>'items')::int, 0) FROM sync_source`)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +75,7 @@ func (s *Store) Sources(ctx context.Context) (map[string]SourceInfo, error) {
 	for rows.Next() {
 		var si SourceInfo
 		var pub *time.Time
-		if err := rows.Scan(&si.Source, &si.State, &pub, &si.Diagnostic, &si.SkippedItems); err != nil {
+		if err := rows.Scan(&si.Source, &si.State, &pub, &si.Diagnostic, &si.SkippedItems, &si.ItemsWithoutDIC, &si.Items); err != nil {
 			return nil, err
 		}
 		si.MaxAgeDays = defaultFSMaxAge
