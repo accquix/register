@@ -36,6 +36,8 @@ checksum:
     - glob: ./dist-extra/*.tar.gz
 
 release:
+  # a tag with a pre-release part (v1.0.0-rc.1) is a GitHub pre-release, never "Latest"
+  prerelease: auto
   # the deployment files, made by deploy/package.sh in the release workflow
   extra_files:
     - glob: ./dist-extra/*.tar.gz
