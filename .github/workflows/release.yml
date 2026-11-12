@@ -66,7 +66,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ github.ref_name }}
+          # the same version string as the binaries: 1.0.0-rc.1, without the tag's "v"
+          build-args: VERSION=${{ steps.meta.outputs.version }}
           sbom: true
           provenance: mode=max
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0

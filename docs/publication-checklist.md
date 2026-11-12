@@ -95,5 +95,8 @@ public", or 422 for fork-PR approval). So these steps happen at publication, in 
 ## Before the first public release
 
 - [x] The tag ruleset above is active; create the first `v*` tag as an admin.
-- [ ] The release workflow ran once on a test tag in a fork, or its first run is watched.
-- [ ] GHCR package visibility set to public after the first image push.
+- [x] The release workflow ran once on a test tag in a fork, or its first run is watched. (v1.0.0-rc.1 on
+  2026-11-12, watched: binaries, checksums, deploy archive and the multi-arch image with SBOM and
+  provenance verified.)
+- [x] GHCR package visibility set to public after the first image push. (2026-11-12; the organisation
+  first had to allow public packages under Settings → Packages.)
