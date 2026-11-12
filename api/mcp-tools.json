@@ -688,6 +688,9 @@
                 "name": {
                   "type": "string"
                 },
+                "stale": {
+                  "type": "boolean"
+                },
                 "typos": {
                   "type": "integer"
                 }

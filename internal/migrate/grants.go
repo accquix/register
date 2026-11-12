@@ -27,7 +27,7 @@ var (
 	stage  = []string{"rpo_record_stage", "fs_stage"}
 	state  = []string{"sync_source", "sync_unit", "sync_run", "rpo_snapshot_seen", "rpo_seen"}
 
-	allTables = join(mirror, search, stage, state, []string{"objection", "objection_record", "objection_active", "register_setup"})
+	allTables = join(mirror, search, stage, state, []string{"objection", "objection_record", "objection_active", "objection_link", "register_setup"})
 )
 
 func join(lists ...[]string) []string {
@@ -55,7 +55,7 @@ func matrix(r Roles, maintain bool) []roleGrants {
 	}
 	return []roleGrants{
 		{r.API, []grant{
-			{"SELECT", join(mirror, search, []string{"sync_source", "objection_active", "register_setup"})},
+			{"SELECT", join(mirror, search, []string{"sync_source", "objection_active", "objection_link", "register_setup"})},
 			{"SELECT", []string{"goose_db_version"}}, // serve checks at start that the schema is current
 		}},
 		{r.Sync, []grant{

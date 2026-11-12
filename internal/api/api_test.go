@@ -622,6 +622,13 @@ func TestTaxpayerNameSearch(t *testing.T) {
 			t.Fatal(err)
 		}
 		want(t, on, "Jana Fiktívna", "stale")
+		// the DIČ in the box: a miss is never "not found", a card says its source is stale
+		if code, _, m := on.get(t, "/v1/search?q=2099900099", true); code != 503 {
+			t.Fatalf("an unknown DIČ on a stale list: %d %v", code, m)
+		}
+		if _, _, m := on.get(t, "/v1/search?q=2099900051", true); path(m["results"].([]any)[0], "stale") != true {
+			t.Fatalf("a taxpayer card from a stale list: %v", m)
+		}
 		if _, err := conn.Exec(ctx, `UPDATE sync_source SET published_as_of = published_as_of + 30 WHERE source = 'fs:ds_dsrdp'`); err != nil {
 			t.Fatal(err)
 		}
@@ -667,6 +674,16 @@ func TestTaxpayerNameSearch(t *testing.T) {
 			t.Fatal(err)
 		}
 		// the sole trader's records are out of name search, and so is the DIČ row that may be theirs
+		want(t, on, "Ján Fiktívny", "searched")
+		// releasing one wrongly linked record does not end the protection of the taxpayer row
+		lst, _ := ingest.ListObjections(ctx, conn)
+		for _, o := range lst {
+			if o.ID == id && len(o.Links) > 1 {
+				if _, err := ingest.ReleaseLink(ctx, conn, id, o.Links[len(o.Links)-1].RecordID, "", true); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		want(t, on, "Ján Fiktívny", "searched")
 		if _, err := ingest.RevokeObjection(ctx, conn, id); err != nil {
 			t.Fatal(err)
@@ -716,6 +733,21 @@ func TestTaxpayerNameSearch(t *testing.T) {
 		version("") // the IČO disappears from the DIČ list again: the link stays (I2)
 		if visible() {
 			t.Fatal("a link stays when the DIČ list changes again")
+		}
+		// I5: a dic_list link is released like any other, and the release really shows the record
+		lst, _ = ingest.ListObjections(ctx, conn)
+		for _, o := range lst {
+			if o.ID != id {
+				continue
+			}
+			for _, l := range o.Links {
+				if hidden, err := ingest.ReleaseLink(ctx, conn, id, l.RecordID, "wrong IČO in the DIČ list", true); err != nil || hidden {
+					t.Fatalf("release %d: hidden %v, %v", l.RecordID, hidden, err)
+				}
+			}
+		}
+		if !visible() {
+			t.Fatal("after releasing the dic_list links the subject is back in name search")
 		}
 		if _, err := ingest.RevokeObjection(ctx, conn, id); err != nil {
 			t.Fatal(err)

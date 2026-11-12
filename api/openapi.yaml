@@ -227,6 +227,9 @@ components:
         name:
           description: Display name, with diacritics and legal form
           type: string
+        stale:
+          description: "kind taxpayer only: the DIČ list this card comes from is not fresh"
+          type: boolean
         typos:
           description: "fuzzy only: corrections needed"
           format: int64

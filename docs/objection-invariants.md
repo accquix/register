@@ -34,7 +34,7 @@ question for the operator (D48); the register only provides the mechanism.
 | I10 | A restore only adds. An objection or a link that exists in the database is kept exactly as it is: a restore never removes, revokes or re-activates an objection, and never releases or re-links a record (the database is at least as new as any backup). Into a database that lacks them, it restores objections with their links, releases and revocations | `TestRestoreKeepsLinksAndReleases`, `TestRestoreNeverReactivatesARevokedObjection`, `TestRestoreNeverReleasesAnExistingLink` |
 | I11 | A backup file can only grow: an export never replaces a file that holds an objection the database does not have, and an unconfirmed installation cannot export | `TestExportNeverDestroysABackup` |
 | I12 | Roles: the API sees which keys are objected, never reasons or history; the sync can link records but cannot add, change, revoke or release; the operator can add an objection, set its revocation and release a link, but cannot change its key, reason or time, cannot delete it, and cannot write register data | `TestSeparateRoles` |
-| I13 | **A taxpayer without an IČO objects by DIČ.** Such an objection has no links. While it is active, taxpayer name search never returns that DIČ; the check runs on every query, so no rebuild, restore or upgrade can open a gap. Exact lookup by DIČ is unaffected. A DIČ that belongs to a subject with an IČO is refused (object by the IČO). **When the DIČ list later gives the objected DIČ an IČO, the sync links the records that carry it** (basis `dic_list`), and from then on I1–I5 apply to those links: they stay when the IČO goes away again, and only the operator releases them. **An objection by IČO or record reaches the taxpayer search too:** when an objected subject's current name holds the query's full name as adjacent words, no taxpayer is returned for that query | `TestTaxpayerNameSearch` (objection, restore, MCP, the DIČ → IČO transition, namesakes), `TestContainsFullName`, `TestObjectionBackupRoundTrip` |
+| I13 | **A taxpayer without an IČO objects by DIČ.** Such an objection has no links. While it is active, taxpayer name search never returns that DIČ; the check runs on every query, so no rebuild, restore or upgrade can open a gap. Exact lookup by DIČ is unaffected. A DIČ that belongs to a subject with an IČO is refused (object by the IČO). **When the DIČ list later gives the objected DIČ an IČO, the sync links the records that carry it** (basis `dic_list`), and from then on I1–I5 apply to those links: they stay when the IČO goes away again, and only the operator releases them; a released `dic_list` link shows the record again (no other check hides it). **An objection by IČO or record reaches the taxpayer search too:** when an objected subject's current name holds the query's full name as adjacent words, no taxpayer is returned for that query | `TestTaxpayerNameSearch` (objection, restore, MCP, the DIČ → IČO transition, namesakes), `TestContainsFullName`, `TestObjectionBackupRoundTrip` |
 
 ## Known limitations (accepted, documented)
 
@@ -46,7 +46,13 @@ question for the operator (D48); the register only provides the mechanism.
 - **A backup older than a revocation re-activates nothing in a database that still has the
   objection** (I10), but restoring it into an empty database restores the objection as it was when
   the backup was taken. Export after every change.
-- **The taxpayer search matches an objected subject by its current RPO name.** A DIČ row of the
+- **A wrong IČO in the DIČ list for an objected DIČ hides a whole subject, not one record.** The
+  `dic_list` links cover every record that carries that IČO while the list gives it, each logged
+  and listed with its unit; the operator releases them one by one (`suppress --release`), and a
+  released record is never linked again by that objection. The DIČ list is the official link
+  between a DIČ and an IČO, so the register follows it and errs towards hiding.
+- **The taxpayer search matches an objected subject by its RPO names** (by the objected IČO even
+  when a link of the objection is released, by a named record, and by every linked record). A DIČ row of the
   same person under a name the objected records never carried (a maiden name, a name the RPO
   record lost) is covered only by an objection by its DIČ. The name rule also hides namesakes of
   an objected person from taxpayer search: privacy wins over completeness.

@@ -171,6 +171,7 @@ type Card struct {
 	Kind    string          `json:"kind" enum:"legal_person,sole_trader,public_body,other,taxpayer" doc:"taxpayer: a DIČ without an IČO (mostly natural persons, for example landlords), from the Financial Administration's DIČ list: found by an exact DIČ, or by the full name when the operator turned taxpayer search on (D56); the name, municipality and the address as the DIČ list publishes it (D57), as in the lookup; never on an instance with anonymous access"`
 	Active  bool            `json:"active"`
 	Typos   int             `json:"typos,omitempty" doc:"fuzzy only: corrections needed"`
+	Stale   bool            `json:"stale,omitempty" doc:"kind taxpayer only: the DIČ list this card comes from is not fresh"`
 }
 
 type SearchInput struct {
@@ -358,6 +359,18 @@ func (s *Server) search(ctx context.Context, in *SearchInput) (*SearchOutput, er
 		cards, err := s.identifierCards(ctx, kind, id)
 		if err != nil {
 			return nil, dbError(err)
+		}
+		// a DIČ answered from a stale DIČ list: a miss is not "no such DIČ" (503, as the lookup
+		// answers), and a taxpayer card says its source is not fresh
+		if kind == normalize.KindDIC && !lookup.Fresh(rd.srcs, "fs:ds_dsrdp") {
+			if len(cards) == 0 {
+				return nil, s.notFound(rd.srcs, "fs:ds_dsrdp")
+			}
+			for i := range cards {
+				if cards[i].Kind == "taxpayer" {
+					cards[i].Stale = true
+				}
+			}
 		}
 		out.Body.Results = cards
 		return out, nil

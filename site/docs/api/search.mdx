@@ -71,6 +71,7 @@ GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
 | `kind` | `legal_person`, `sole_trader`, `public_body`, `other`, or `taxpayer`: a taxpayer without an IČO, with `dic`, `name`, `municipality` and the published `address` ([details](/concepts/search#taxpayers-without-an-ičo)). |
 | `active` | `false` only for a terminated subject found by identifier. |
 | `typos` | Fuzzy only: corrections needed. |
+| `stale` | `kind: taxpayer` only: the DIČ list this card comes from is not fresh. A DIČ that is not found on a stale list answers `503`, never an empty "not found". |
 
 The response also carries `taxpayers` when the instance searches taxpayers by name: `searched`, `not_searched`,
 `rate_limited` or `stale` ([details](/concepts/search#taxpayers-without-an-ičo)).

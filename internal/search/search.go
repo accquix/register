@@ -44,8 +44,7 @@ func New(pool *pgxpool.Pool, cfg Config) *Searcher {
 // for a subject whose key an active objection names. It reads the view objection_active: the keys
 // only, never the reasons.
 const NotSuppressed = `NOT EXISTS (SELECT 1 FROM objection_active x WHERE x.ico = n.ico)
-  AND NOT EXISTS (SELECT 1 FROM objection_active x WHERE n.ico IS NULL AND 'r' || x.rpo_id = n.skey)
-  AND NOT EXISTS (SELECT 1 FROM objection_active x JOIN fs_tax_subject t ON t.dic = x.dic WHERE n.ico IS NOT NULL AND t.ico = n.ico)`
+  AND NOT EXISTS (SELECT 1 FROM objection_active x WHERE n.ico IS NULL AND 'r' || x.rpo_id = n.skey)`
 
 // Hit is one matched name of a subject.
 type Hit struct {
@@ -264,11 +263,15 @@ type Taxpayer struct {
 // contain every word of the query (a cheap filter; objections are few). A taxpayer row without an
 // IČO may be the same person as such a subject (a sole trader's personal DIČ, an IČO the DIČ list
 // does not carry yet or carries malformed), and the register cannot tell; it errs towards hiding.
-const objectedNames = `SELECT r.name_core FROM objection_active x JOIN rpo_record r ON r.ico = x.ico
+//
+// It reads the objected IČO whether or not a link of the objection is released (ico_any): releasing
+// one wrongly linked record must not stop protecting the person's taxpayer row. It also reads the
+// records linked to an objection, which keep their link when they lose the IČO.
+const objectedNames = `SELECT r.name_core FROM rpo_record r
 WHERE string_to_array(r.name_core, ' ') @> $1::text[]
-UNION
-SELECT r.name_core FROM objection_active x JOIN rpo_record r ON r.id = x.rpo_id
-WHERE string_to_array(r.name_core, ' ') @> $1::text[]
+  AND (r.ico IN (SELECT ico_any FROM objection_active WHERE ico_any IS NOT NULL)
+       OR r.id IN (SELECT rpo_id FROM objection_active WHERE rpo_id IS NOT NULL)
+       OR r.id IN (SELECT rpo_id FROM objection_link))
 LIMIT 10000`
 
 // ContainsFullName reports whether name (a folded name) holds the full name key as a run of

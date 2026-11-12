@@ -156,7 +156,7 @@ func AddObjection(ctx context.Context, conn *pgx.Conn, key, reason string) (id i
 	}
 	if k.dic != nil {
 		var ico string
-		err := tx.QueryRow(ctx, `SELECT ico FROM fs_tax_subject WHERE dic = $1 AND ico IS NOT NULL`, *k.dic).Scan(&ico)
+		err := tx.QueryRow(ctx, `SELECT ico FROM fs_tax_subject WHERE dic = $1 AND ico IS NOT NULL AND absent_since IS NULL`, *k.dic).Scan(&ico)
 		switch {
 		case err == nil:
 			return 0, c, fmt.Errorf("%w %s", ErrDICHasICO, ico)

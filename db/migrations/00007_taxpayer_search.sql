@@ -37,14 +37,23 @@ ALTER TABLE objection_record DROP CONSTRAINT objection_record_basis_check;
 ALTER TABLE objection_record ADD CONSTRAINT objection_record_basis_check
     CHECK (basis IN ('at_objection', 'carried_ico', 'restored', 'migrated', 'dic_list'));
 
--- What the API may see, now with the objected DIČs.
+-- What the API may see, now with the objected DIČs, and the objected IČO also when a link of the
+-- objection is released (ico_any): the taxpayer search hides DIČ rows by the names of objected
+-- subjects, and a released record does not end the objection for the rest of the subject.
 CREATE OR REPLACE VIEW objection_active AS
     SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM objection_record a
                                  WHERE a.objection_id = o.id AND a.released_at IS NOT NULL)
                 THEN o.ico END AS ico,
            o.rpo_id,
-           o.dic
+           o.dic,
+           o.ico AS ico_any
     FROM objection o WHERE o.revoked_at IS NULL;
+
+-- The records active objections cover through an unreleased link: ids only, no reasons, no
+-- history. The taxpayer search reads their names (a record keeps its link when it loses the IČO).
+CREATE VIEW objection_link AS
+    SELECT a.rpo_id FROM objection_record a JOIN objection o ON o.id = a.objection_id
+    WHERE o.revoked_at IS NULL AND a.released_at IS NULL;
 
 -- +goose Down
 
@@ -61,6 +70,7 @@ END
 $$;
 -- +goose StatementEnd
 
+DROP VIEW objection_link;
 DROP VIEW objection_active;
 ALTER TABLE objection_record DROP CONSTRAINT objection_record_basis_check;
 ALTER TABLE objection_record ADD CONSTRAINT objection_record_basis_check

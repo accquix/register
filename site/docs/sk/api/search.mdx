@@ -71,6 +71,7 @@ GET /v1/search?q=<text>&mode=default|fuzzy&limit=<1-20>
 | `kind` | `legal_person`, `sole_trader`, `public_body`, `other` alebo `taxpayer`: daňovník bez IČO s `dic`, `name`, `municipality` a zverejnenou `address` ([podrobnosti](/sk/concepts/search#daňovníci-bez-ičo)). |
 | `active` | `false` iba pri zaniknutom subjekte nájdenom podľa identifikátora. |
 | `typos` | Len pri preklepoch: počet opráv. |
+| `stale` | Len pri `kind: taxpayer`: zoznam DIČ, z ktorého karta pochádza, nie je čerstvý. DIČ, ktoré sa na zastaranom zozname nenájde, odpovie `503`, nikdy prázdnym „nenájdené“. |
 
 Ak inštancia vyhľadáva daňovníkov podľa mena, odpoveď nesie aj `taxpayers`: `searched`, `not_searched`,
 `rate_limited` alebo `stale` ([podrobnosti](/sk/concepts/search#daňovníci-bez-ičo)).
