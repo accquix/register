@@ -14,7 +14,7 @@ subjects. Names are compared without diacritics, without case and without the le
 | Input | a name, or an exact IČO, DIČ or IČ DPH | an exact IČO, DIČ or IČ DPH |
 | Answer | up to 20 candidates: name, identifiers, address, kind, active | one subject with every section: identity, tax, VAT, risk, each with its source and date |
 | Terminated subjects | by identifier only, flagged `active: false` | yes |
-| Taxpayers without an IČO | by exact DIČ only: DIČ, name, municipality | by exact DIČ only: DIČ, name, municipality |
+| Taxpayers without an IČO | by exact DIČ; by full name only when the operator turns it on: DIČ, name, municipality | by exact DIČ only: DIČ, name, municipality |
 | Subjects with an objection | by identifier only | yes |
 | Use it to | let a person pick a business | confirm facts before you rely on them |
 
@@ -57,6 +57,32 @@ Fuzzy search is **optional and potentially CPU-intensive**, and it **never subst
 Operators can switch it off (`REGISTER_SEARCH_FUZZY=false`); `/v1/capabilities` tells clients whether it is on. It
 has a limit on concurrent fuzzy searches, a timeout and, when the operator sets one, a rate limit per key.
 
+## Taxpayers without an IČO
+
+About 159 000 taxpayers in the Financial Administration's DIČ list have no IČO: mostly private persons, for example
+landlords. By default they are found only by their exact DIČ. An operator can turn on name search for them
+(`REGISTER_SEARCH_TAXPAYERS=true`); it is deliberately narrower than the search for businesses:
+
+- **The full name only.** Every word of the name and no other, in any order: `Jana Fiktívna` and `fiktivna jana`
+  find "Jana Fiktívna", but `jana`, `jana fikt` and `jana fiktivna nova` do not. Diacritics and case are ignored.
+- **Default mode only**, never fuzzy, and only with an API key; never on an instance with anonymous access.
+- **What the lookup gives:** DIČ, name, municipality and the address as the DIČ list publishes it. Cards have `kind: taxpayer` and come after the businesses, in the
+  room they leave, at most five. See [Data and privacy](/project/data-and-privacy#taxpayers-without-an-ičo) before
+  you turn it on.
+- **Its own limit** per key (1 a second, burst 10: enough for a person typing a name, slow for harvesting). Over
+  it, the search still answers, without taxpayers, and the response says `taxpayers: rate_limited`. With one key
+  for a whole application, all its users share this limit: raise it for a busy application.
+- **Only from a fresh DIČ list.** When it is stale, taxpayers are not searched (`taxpayers: stale`), so a missing
+  person never looks like a confirmed absence.
+- **Objections:** a person can object by DIČ (`suppress --subject <DIČ>`); the register then never returns them in
+  name search, and if the DIČ list later gives them an IČO, their business records are hidden too, automatically.
+  An objection by IČO also covers a DIČ row that may be the same person: when an objected subject's name holds the
+  queried full name as adjacent words, no taxpayer is returned for it, namesakes included. Both checks run on every
+  query.
+
+The response field `taxpayers` says what happened: `searched`, `not_searched` (fuzzy mode, fewer than two words, or
+the businesses filled the limit), `rate_limited` or `stale`. It is absent when the switch is off.
+
 ## What it costs
 
 Measured on the real data (1 017 893 active subjects) on a small database:
@@ -73,9 +99,10 @@ When the database is saturated, a 1/8 vCPU tier answers about 30 default searche
 ## What search does not do
 
 - Terminated subjects are not in name search. An exact identifier finds them, flagged `active: false`.
-- Natural persons without an IČO (taxpayers known only by DIČ) are never found by name. Their exact DIČ typed into
-  the box gives one card of `kind: taxpayer` with the DIČ, name and municipality only, the same as the lookup, and
-  not on an instance with anonymous access.
+- Natural persons without an IČO (taxpayers known only by DIČ) are not found by name unless the operator turns it
+  on, and then only by the full name ([above](#taxpayers-without-an-ičo)). Their exact DIČ typed into the box gives
+  one card of `kind: taxpayer`, the same as the lookup (with the published address), and not on an instance with
+  anonymous access.
 - A subject kept out of search after an objection is still found by its exact identifier.
 - Results are capped at 20; there is no paging in v1.
 - Inflected forms are different words: `lipa` does not find "U Lipy". Type the start of the word (`lip`), or use

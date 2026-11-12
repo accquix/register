@@ -243,9 +243,11 @@ temporary file first, because a ZIP's index is at the end. Set `GOMEMLIMIT`.
 - **Sole traders — returned:** the business name (it contains the person's name; this cannot be
   avoided), the identifiers, the place of business, the register entry, the status and dates.
 - **Terminated subjects:** available by exact lookup, left out of the default search.
-- **Natural persons without an IČO:** never in name search; exact DIČ only (in the lookup and in
-  the search box, card `kind: taxpayer`), DIČ, name and municipality only, never on an instance
-  with anonymous access (D26, D54).
+- **Natural persons without an IČO:** found by exact DIČ (in the lookup and in the search box,
+  card `kind: taxpayer`); by name only when the operator turns on `REGISTER_SEARCH_TAXPAYERS`, and
+  then by the full name only, in the default mode, within a separate per-key limit. DIČ, name,
+  municipality and the address the DIČ list publishes (D57), for invoices. Never on an
+  instance with anonymous access; an objection by DIČ keeps one out of that search (D26, D54, D56).
 - **Objections:** `accquix-register suppress --subject <IČO>` records an objection; the person
   stays reachable by exact identifier and disappears from name search. `--undo --id N` revokes
   one objection and keeps the row as the record of the undo. The objections are the only state

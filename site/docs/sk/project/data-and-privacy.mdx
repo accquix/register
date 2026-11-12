@@ -43,6 +43,31 @@ právnym poradcom pre svoje použitie.
 | --- | --- |
 | Obchodné meno, identifikátory, miesto podnikania alebo sídlo, právnu formu, zápis v registri, dátumy, stav | Bydlisko, ak sa líši od miesta podnikania, dátum narodenia, štatutárne orgány, spoločníkov, zástupcov |
 
-Fyzické osoby bez IČO, známe len podľa DIČ, nie sú nikdy vo vyhľadávaní podľa názvu; ich presné DIČ, pri overení aj
-vo vyhľadávacom poli, vráti len DIČ, meno a obec, a to iba overeným klientom. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
+Jediná výnimka: daňovník bez IČO (najmä súkromná osoba) má len adresu, ktorú Finančná správa zverejňuje v zozname
+DIČ. Ukladá sa s riadkom a vráti sa pri presnom DIČ s API kľúčom.
+
+## Daňovníci bez IČO
+
+| | Predvolene | S `REGISTER_SEARCH_TAXPAYERS=true` |
+| --- | --- | --- |
+| Presné DIČ, s kľúčom | áno | áno |
+| Celé meno | nie | áno |
+| Časť mena, približne | nie | nie |
+| DIČ a meno | áno | áno |
+| Adresa, ako ju zverejňuje zoznam DIČ | áno, podľa presného DIČ | áno |
+| Anonymný prístup | nikdy sa nezobrazia | prepínač nemôže byť zapnutý |
+| Námietky podľa DIČ | podporované (pôsobia na vyhľadávanie podľa mena) | podporované |
+
+<Callout type="warning">
+**Adresy daňovníkov sú osobné údaje.** Adresa súkromnej osoby, napríklad prenajímateľa, ktorému fakturujete, je
+osobný údaj, hoci ju Finančná správa zverejňuje. Inštancia, ktorá ju poskytuje vašim aplikáciám, z vás robí
+prevádzkovateľa tohto spracúvania, a rovnako zapnutie vyhľadávania podľa mena. Určte účel (napríklad vystavovanie
+faktúr) a jeho právny základ (čl. 5 a 6 GDPR), API kľúče dajte len aplikáciám, ktoré ich potrebujú, informujte
+dotknuté osoby, ako to vyžaduje zákon, a námietky vybavujte príkazom `suppress --subject <DIČ>`. Register necháva
+vyhľadávanie podľa mena predvolene vypnuté, všetko za API kľúčmi, s limitom na kľúč a bez dopytov v logoch; či je
+vaše použitie zákonné, posudzujete vy a váš právny poradca.
+</Callout>
+
+Fyzické osoby bez IČO, známe len podľa DIČ, nie sú vo vyhľadávaní podľa názvu, kým ho nezapnete, a potom
+len podľa celého mena, iba overeným klientom a nikdy osoba, ktorá namietala. Logy neobsahujú dopyty ani identifikátory. Softvér neposiela
 nič nikam okrem požiadaviek na oficiálne zdroje: žiadna telemetria.

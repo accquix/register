@@ -49,11 +49,36 @@ func lockObjections(ctx context.Context, tx pgx.Tx) error {
 // no link yet. There is no condition on when the record or the objection was created: whichever
 // of the two commits first, the other one sees it here, under the lock. A released link is a row
 // too, so a released record is never linked again.
+//
+// An objection by DIČ is linked the same way to the records that carry the IČO the DIČ list gives
+// that DIČ (basis dic_list, D56): the person objected before they appeared in RPO, and their new
+// records must not come back into name search on their own.
 const linkCarriers = `INSERT INTO objection_record (objection_id, rpo_id, basis, source)
 SELECT o.id, r.id, $1, nullif($2, '') FROM objection o JOIN rpo_record r ON r.ico = o.ico
 WHERE o.revoked_at IS NULL
+UNION ALL
+SELECT o.id, r.id, '` + BasisDICList + `', nullif($2, '') FROM objection o
+JOIN fs_tax_subject t ON t.dic = o.dic AND t.ico IS NOT NULL
+JOIN rpo_record r ON r.ico = t.ico
+WHERE o.revoked_at IS NULL
 ON CONFLICT DO NOTHING
 RETURNING objection_id`
+
+// RefreshDICLinked rebuilds the search rows of the records this transaction linked to objections
+// by DIČ (their link rows carry the transaction's now()). The DIČ list unit calls it: such a link
+// can appear without any RPO change.
+func refreshDICLinked(ctx context.Context, tx pgx.Tx) error {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT `+skeyExpr+` FROM objection_record a JOIN rpo_record r ON r.id = a.rpo_id
+WHERE a.basis = '`+BasisDICList+`' AND a.created_at = now()`)
+	if err != nil {
+		return err
+	}
+	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(keys) == 0 {
+		return err
+	}
+	return RefreshSubjects(ctx, tx, keys)
+}
 
 // syncObjections takes the objection lock and links the records that carry an objected IČO. It
 // returns, per objection, how many links it added. Every unit calls it after its merge, and every

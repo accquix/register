@@ -73,7 +73,9 @@ func NewMCPServer(call Caller, o MCPOptions) *mcp.Server {
 		Description: "Search Slovak companies and sole traders by name, IČO, DIČ or IČ DPH. Diacritics, case, word order and the " +
 			"legal form are ignored; the start of any word matches. Returns up to 20 candidates ordered by relevance. A name " +
 			"match is not a confirmation: resolve a candidate with lookup_subject before stating facts about it. Use mode " +
-			"fuzzy only when the default search found nothing.",
+			"fuzzy only when the default search found nothing. Taxpayers without an IČO (kind taxpayer) appear only when the " +
+			"instance allows it and only for their exact full name; the field taxpayers says whether they were searched, and " +
+			"an empty result is never proof that a person does not exist.",
 		InputSchema: searchIn, OutputSchema: mustSchema[SearchBody](), Annotations: ro,
 	}, toolHandler(call, o.Log, "search_subjects", func(raw json.RawMessage) (string, url.Values, error) {
 		var a searchArgs
@@ -202,6 +204,14 @@ func summarizeSearch(body []byte) string {
 		}
 		sb.WriteString("\n")
 	}
+	switch b.Taxpayers {
+	case "rate_limited":
+		sb.WriteString("Taxpayers without an IČO were not searched this time (rate limit); retry later.\n")
+	case "stale":
+		sb.WriteString("Taxpayers without an IČO were not searched: the DIČ list is not fresh.\n")
+	case "not_searched":
+		sb.WriteString("Taxpayers without an IČO were not searched: they are matched only by their full name, in the default mode.\n")
+	}
 	return sb.String() + attributionLine(b.Attribution)
 }
 
@@ -212,7 +222,11 @@ func summarizeLookup(body []byte) string {
 	}
 	var sb strings.Builder
 	if b.Taxpayer != nil {
-		fmt.Fprintf(&sb, "Natural person without an IČO: DIČ %s, %s.\n", b.Taxpayer.DIC, b.Taxpayer.Name)
+		fmt.Fprintf(&sb, "Natural person without an IČO: DIČ %s, %s", b.Taxpayer.DIC, b.Taxpayer.Name)
+		if a := b.Taxpayer.Address; a != nil {
+			fmt.Fprintf(&sb, ", %s", strings.Join(nonEmpty(a.Street, strings.TrimSpace(a.PostalCode+" "+a.Municipality), a.Country), ", "))
+		}
+		sb.WriteString(".\n")
 	}
 	for _, s := range b.Subjects {
 		fmt.Fprintf(&sb, "- %s", s.Identity.Name)

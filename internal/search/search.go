@@ -235,3 +235,96 @@ func rank(core string, words []string, hits []Hit, limit int) []Hit {
 	}
 	return out
 }
+
+// TaxpayerMax is the most taxpayers one name search returns (D56).
+const TaxpayerMax = 5
+
+// NameKey is the order-free form of a folded name: its words sorted by byte and joined by one
+// space. It is the Go side of the SQL function register_name_key (migration 00007); the two must
+// give the same key for the same name_core.
+func NameKey(core string) (key string, words int) {
+	ws := strings.Fields(core)
+	sort.Strings(ws)
+	return strings.Join(ws, " "), len(ws)
+}
+
+// Taxpayer is a taxpayer without an IČO found by its full name (D56): what the lookup by DIČ
+// returns on an instance with taxpayers on, the address included (D57).
+type Taxpayer struct {
+	DIC          string
+	Name         string
+	Municipality string
+	Street       string // street and number, as the DIČ list publishes them (D57)
+	PostalCode   string
+	Country      string
+}
+
+// objectedNames reads the names of the subjects with an active objection by IČO or by record that
+// contain every word of the query (a cheap filter; objections are few). A taxpayer row without an
+// IČO may be the same person as such a subject (a sole trader's personal DIČ, an IČO the DIČ list
+// does not carry yet or carries malformed), and the register cannot tell; it errs towards hiding.
+//
+// It reads the objected IČO whether or not a link of the objection is released (ico_any): releasing
+// one wrongly linked record must not stop protecting the person's taxpayer row. It also reads the
+// records linked to an objection, which keep their link when they lose the IČO.
+const objectedNames = `SELECT r.name_core FROM rpo_record r
+WHERE string_to_array(r.name_core, ' ') @> $1::text[]
+  AND (r.ico IN (SELECT ico_any FROM objection_active WHERE ico_any IS NOT NULL)
+       OR r.id IN (SELECT rpo_id FROM objection_active WHERE rpo_id IS NOT NULL)
+       OR r.id IN (SELECT rpo_id FROM objection_link))
+LIMIT 10000`
+
+// ContainsFullName reports whether name (a folded name) holds the full name key as a run of
+// adjacent words, in any order within the run: "ing jan novak stolarstvo" holds "jan novak", but
+// "jan novak stolarstvo peter" does not hold "jan peter". Words of a full name stand together in a
+// sole trader's name; words scattered across it are a different name.
+func ContainsFullName(name, key string) bool {
+	ws := strings.Fields(name)
+	n := len(strings.Fields(key))
+	for i := 0; n > 0 && i+n <= len(ws); i++ {
+		if k, _ := NameKey(strings.Join(ws[i:i+n], " ")); k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// Taxpayers finds the taxpayers without an IČO whose name is exactly the query's words, in any
+// order: no prefixes, no fuzzy, no subset. A query of fewer than two words finds none. A taxpayer
+// with an active objection by DIČ is never returned, and none is returned when an objected
+// subject's name holds the query's full name (ContainsFullName).
+func (s *Searcher) Taxpayers(ctx context.Context, core string, limit int) ([]Taxpayer, error) {
+	key, n := NameKey(core)
+	if n < 2 || limit < 1 {
+		return nil, nil
+	}
+	// An objected subject's name holds the query's full name: return no taxpayer for it at all
+	// (namesakes included), never one who may be that person.
+	names, err := s.pool.Query(ctx, objectedNames, strings.Fields(core))
+	if err != nil {
+		return nil, fmt.Errorf("taxpayers: %w", err)
+	}
+	cores, err := pgx.CollectRows(names, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("taxpayers: %w", err)
+	}
+	for _, c := range cores {
+		if ContainsFullName(c, key) {
+			return nil, nil
+		}
+	}
+	limit = min(limit, TaxpayerMax)
+	rows, err := s.pool.Query(ctx, `SELECT t.dic, coalesce(t.name, ''), coalesce(t.municipality, ''),
+  coalesce(t.street, ''), coalesce(t.postal_code, ''), coalesce(t.country, '') FROM fs_tax_subject t
+WHERE register_name_key(t.name_core) = $1 AND t.ico IS NULL AND t.absent_since IS NULL
+  AND NOT EXISTS (SELECT 1 FROM objection_active x WHERE x.dic = t.dic)
+ORDER BY t.name, t.dic LIMIT $2`, key, limit)
+	if err != nil {
+		return nil, fmt.Errorf("taxpayers: %w", err)
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Taxpayer, error) {
+		var t Taxpayer
+		err := r.Scan(&t.DIC, &t.Name, &t.Municipality, &t.Street, &t.PostalCode, &t.Country)
+		return t, err
+	})
+}
